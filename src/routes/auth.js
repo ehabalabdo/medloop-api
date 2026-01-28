@@ -1,5 +1,4 @@
-const express = require("express");
-const jwt = require("jsonwebtoken");
+
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const pool = require("../db.js");
@@ -25,18 +24,6 @@ router.post("/login", async (req, res) => {
 });
 
 module.exports = router;
-
-  if (patient.rows.length) {
-    const p = patient.rows[0];
-    // TEMP: Plain text password comparison for testing
-    const ok = password === p.password_hash;
-    if (!ok) return res.status(401).json({ error: "Invalid credentials" });
-
-    const token = jwt.sign(
-      { patient_id: p.id, type: "patient" },
-      process.env.JWT_SECRET,
-      { expiresIn: "8h" }
-    );
 
     return res.json({ token, type: "patient" });
   }
