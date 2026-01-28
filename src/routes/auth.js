@@ -19,8 +19,10 @@ router.post("/login", async (req, res) => {
     const user = staff.rows[0];
     // Check password securely using bcrypt
     const ok = await bcrypt.compare(password, user.password_hash);
+    console.log("Password match:", ok);
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
+    console.log("Checking clinic for ID:", user.clinic_id);
     // Check if clinic is active (optional, but recommended)
     const clinicRes = await pool.query(
       `SELECT id, active FROM clinics WHERE id=$1`,
