@@ -1,9 +1,9 @@
 // Fixed bcrypt issue
-import express from "express";
-import bcrypt from "bcryptjs";
-import crypto from "crypto";
-import pool from "../db.js";
-import { verifyToken } from "../middleware/auth.js";
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const pool = require("../db.js");
+const { verifyToken } = require("../middleware/auth.js");
 
 function makeUsername(phone) {
   const clean = String(phone || "").replace(/\D/g, "");
@@ -80,4 +80,4 @@ router.post("/", verifyToken, async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;

@@ -1,7 +1,7 @@
-import express from "express";
-import jwt from "jsonwebtoken";
-import pool from "../db.js";
-import bcrypt from "bcryptjs";
+const express = require("express");
+const jwt = require("jsonwebtoken");
+const pool = require("../db.js");
+const bcrypt = require("bcryptjs");
 
 const router = express.Router();
 
@@ -89,4 +89,4 @@ router.post("/refresh", (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;
