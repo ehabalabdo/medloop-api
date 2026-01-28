@@ -1,8 +1,3 @@
-// Middleware مؤقت يسمح لأي طلب ويضيف user admin
-export const verifyToken = (req, res, next) => {
-  req.user = { role: "admin" };
-  next();
-};
 import jwt from "jsonwebtoken";
 
 export function auth(req, res, next) {
