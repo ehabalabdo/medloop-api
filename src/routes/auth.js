@@ -1,15 +1,12 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import pool from "../db.js";
-// import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 
 const router = express.Router();
 
 router.post("/login", async (req, res) => {
   const { username, password } = req.body;
-
-  // Debug: عرض القيم الفعلية القادمة من الفرونتند
-  console.log("LOGIN DEBUG:", username, password);
 
   // 1) users
   const staff = await pool.query(
@@ -19,7 +16,7 @@ router.post("/login", async (req, res) => {
 
   if (staff.rows.length) {
     const user = staff.rows[0];
-    // إلغاء التشفير: تحقق نصي فقط
+    // TEMP: Plain text password comparison for testing
     const ok = password === user.password_hash;
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
@@ -40,7 +37,7 @@ router.post("/login", async (req, res) => {
 
   if (patient.rows.length) {
     const p = patient.rows[0];
-    // إلغاء التشفير: تحقق نصي فقط
+    // TEMP: Plain text password comparison for testing
     const ok = password === p.password_hash;
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
