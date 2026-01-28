@@ -6,64 +6,45 @@ const bcrypt = require("bcryptjs");
 const router = express.Router();
 
 
+
 router.post("/login", async (req, res) => {
   const { username, password } = req.body;
+  console.log("LOGIN_ATTEMPT:", username); // لوج بسيط جداً للتأكد من وصول الطلب
 
-  // 1) users (staff)
-  const staff = await pool.query(
-    `SELECT id, email, password_hash, full_name, role, clinic_id FROM users WHERE email=$1`,
-    [username]
-  );
+  try {
+    const result = await pool.query(
+      "SELECT * FROM users WHERE email = $1",
+      [username]
+    );
+    const user = result.rows[0];
 
-  if (staff.rows.length) {
-    const user = staff.rows[0];
-    // Check password securely using bcrypt
-    try {
-      console.log("--- Login Attempt Started ---");
-      console.log("Email from request:", username);
-      console.log("User from DB:", user ? "Found" : "Not Found");
-      if (user) {
-        const ok = await bcrypt.compare(password, user.password_hash);
-        console.log("Bcrypt Match Result:", ok);
-        if (!ok) return res.status(401).json({ error: "Invalid password" });
-        console.log("Checking Clinic ID:", user.clinic_id);
-      }
-    } catch (err) {
-      console.error("CRITICAL AUTH ERROR:", err.message);
-      return res.status(500).json({ error: "Internal server error during auth" });
+    if (!user) {
+      console.log("USER_NOT_FOUND");
+      return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // ...existing code...
-    // Check if clinic is active (optional, but recommended)
-    const clinicRes = await pool.query(
-      `SELECT id, active FROM clinics WHERE id=$1`,
-      [user.clinic_id]
-    );
-    if (!clinicRes.rows.length || clinicRes.rows[0].active === false) {
-      return res.status(403).json({ error: "Clinic is not active" });
+    const match = await bcrypt.compare(password, user.password_hash);
+    console.log("PASSWORD_MATCH:", match);
+
+    if (!match) return res.status(401).json({ error: "Invalid credentials" });
+
+    // فحص العيادة
+    console.log("CLINIC_ID:", user.clinic_id);
+    const clinicRes = await pool.query("SELECT active FROM clinics WHERE id=$1", [user.clinic_id]);
+    
+    if (!clinicRes.rows.length || !clinicRes.rows[0].active) {
+       console.log("CLINIC_INACTIVE_OR_MISSING");
+       return res.status(403).json({ error: "Clinic not active" });
     }
 
-    // Build JWT payload with clinicId and role
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        fullName: user.full_name,
-        role: user.role,
-        clinicId: user.clinic_id,
-        type: "staff"
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "8h" }
-    );
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
+    res.json({ token, user: { email: user.email, role: user.role } });
 
-    // Remove password_hash before sending user object
-    const { password_hash, ...userWithoutPassword } = user;
-    return res.json({
-      token,
-      user: userWithoutPassword
-    });
+  } catch (err) {
+    console.error("AUTH_CRASH:", err);
+    res.status(500).json({ error: "Server Error" });
   }
+});
 
   // 2) patients
   const patient = await pool.query(
