@@ -5,28 +5,51 @@ import bcrypt from "bcryptjs";
 
 const router = express.Router();
 
+
 router.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
-  // 1) users
+  // 1) users (staff)
   const staff = await pool.query(
-    "SELECT id, role, password_hash FROM users WHERE email=$1",
+    `SELECT id, email, password_hash, full_name, role, clinic_id FROM users WHERE email=$1`,
     [username]
   );
 
   if (staff.rows.length) {
     const user = staff.rows[0];
-    // TEMP: Plain text password comparison for testing
-    const ok = password === user.password_hash;
+    // Check password securely using bcrypt
+    const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
+    // Check if clinic is active (optional, but recommended)
+    const clinicRes = await pool.query(
+      `SELECT id, active FROM clinics WHERE id=$1`,
+      [user.clinic_id]
+    );
+    if (!clinicRes.rows.length || clinicRes.rows[0].active === false) {
+      return res.status(403).json({ error: "Clinic is not active" });
+    }
+
+    // Build JWT payload with clinicId and role
     const token = jwt.sign(
-      { id: user.id, role: user.role, type: "staff" },
+      {
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name,
+        role: user.role,
+        clinicId: user.clinic_id,
+        type: "staff"
+      },
       process.env.JWT_SECRET,
       { expiresIn: "8h" }
     );
 
-    return res.json({ token, type: "staff", role: user.role });
+    // Remove password_hash before sending user object
+    const { password_hash, ...userWithoutPassword } = user;
+    return res.json({
+      token,
+      user: userWithoutPassword
+    });
   }
 
   // 2) patients
