@@ -1,46 +1,40 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const express = require("express");
+const jwt = require("jsonwebtoken");
 const pool = require("../db.js");
 const bcrypt = require("bcryptjs");
-
 const router = express.Router();
-
-
-
 
 router.post("/login", async (req, res) => {
   try {
     const { username, password } = req.body;
-    console.log("Login attempt for:", username);
+    console.log("LOGIN_TRY:", username);
 
     const userRes = await pool.query("SELECT * FROM users WHERE email = $1", [username]);
     const user = userRes.rows[0];
 
-    if (!user) return res.status(401).json({ error: "User not found" });
+    if (!user) return res.status(401).json({ error: "No User" });
 
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) return res.status(401).json({ error: "Wrong password" });
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) return res.status(401).json({ error: "Wrong Pass" });
 
-    // فحص العيادة - تأكد أن هذا الجدول موجود
+    // فحص العيادة
     const clinicRes = await pool.query("SELECT active FROM clinics WHERE id = $1", [user.clinic_id]);
-    if (clinicRes.rows.length === 0 || !clinicRes.rows[0].active) {
-      return res.status(403).json({ error: "Clinic inactive or not found" });
+    if (!clinicRes.rows.length || !clinicRes.rows[0].active) {
+      return res.status(403).json({ error: "Clinic Issue" });
     }
 
-    const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
-    return res.json({ token, user: { email: user.email, fullName: user.full_name, role: user.role } });
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
+    return res.json({ token, user: { email: user.email, role: user.role } });
 
-  } catch (error) {
-    console.error("Auth Error:", error);
-    return res.status(500).json({ error: "Server Internal Error" });
+  } catch (err) {
+    console.error("AUTH_ERROR:", err);
+    return res.status(500).json({ error: "Server Error" });
   }
 });
 
-  // 2) patients
-  const patient = await pool.query(
-    "SELECT id, password_hash FROM patients WHERE username=$1 AND has_access=true",
-    [username]
-  );
+module.exports = router;
 
   if (patient.rows.length) {
     const p = patient.rows[0];
