@@ -1,3 +1,18 @@
+// TEMP: Public route to reset password for ehab@medloop.com
+app.get("/reset-my-password", async (req, res) => {
+  const bcrypt = require("bcryptjs");
+  const pool = require("./db.js");
+  try {
+    const hash = await bcrypt.hash("123", 10);
+    await pool.query(
+      "UPDATE users SET password_hash=$1 WHERE email=$2",
+      [hash, "ehab@medloop.com"]
+    );
+    res.send("Password updated to 123 successfully");
+  } catch (err) {
+    res.status(500).send("Error updating password");
+  }
+});
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
