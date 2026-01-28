@@ -24,24 +24,3 @@ router.post("/login", async (req, res) => {
 });
 
 module.exports = router;
-
-    return res.json({ token, type: "patient" });
-  }
-
-  res.status(401).json({ error: "Invalid credentials" });
-});
-
-router.post("/refresh", (req, res) => {
-  const { token } = req.body;
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
-    const newAccess = jwt.sign(decoded, process.env.JWT_SECRET, {
-      expiresIn: "8h",
-    });
-    res.json({ token: newAccess });
-  } catch {
-    res.status(401).json({ error: "Invalid refresh token" });
-  }
-});
-
-module.exports = router;
