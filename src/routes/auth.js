@@ -18,11 +18,22 @@ router.post("/login", async (req, res) => {
   if (staff.rows.length) {
     const user = staff.rows[0];
     // Check password securely using bcrypt
-    const ok = await bcrypt.compare(password, user.password_hash);
-    console.log("Password match:", ok);
-    if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+    try {
+      console.log("--- Login Attempt Started ---");
+      console.log("Email from request:", username);
+      console.log("User from DB:", user ? "Found" : "Not Found");
+      if (user) {
+        const ok = await bcrypt.compare(password, user.password_hash);
+        console.log("Bcrypt Match Result:", ok);
+        if (!ok) return res.status(401).json({ error: "Invalid password" });
+        console.log("Checking Clinic ID:", user.clinic_id);
+      }
+    } catch (err) {
+      console.error("CRITICAL AUTH ERROR:", err.message);
+      return res.status(500).json({ error: "Internal server error during auth" });
+    }
 
-    console.log("Checking clinic for ID:", user.clinic_id);
+    // ...existing code...
     // Check if clinic is active (optional, but recommended)
     const clinicRes = await pool.query(
       `SELECT id, active FROM clinics WHERE id=$1`,

@@ -1,7 +1,7 @@
-const express = require("express");
-const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
-const pool = require("../db.js");
+import express from "express";
+// import bcrypt from "bcrypt";
+import crypto from "crypto";
+import pool from "../db.js";
 
 function makeDoctorUsername(name) {
   return "dr_" + name.toLowerCase().replace(/\s+/g, "");
@@ -26,7 +26,7 @@ router.post("/doctors", async (req, res) => {
 
   let username = makeDoctorUsername(full_name);
   let password = makePassword();
-  let password_hash = await bcrypt.hash(password, 10);
+  let password_hash = password; // بدون تشفير
 
   try {
     const { rows } = await pool.query(
@@ -44,7 +44,7 @@ router.post("/doctors", async (req, res) => {
       // أضف 4 أرقام عشوائية إذا كان الاسم مكرر
       username = username + '-' + Math.floor(1000 + Math.random() * 9000);
       password = makePassword();
-      password_hash = await bcrypt.hash(password, 10);
+      password_hash = password; // بدون تشفير
       const { rows } = await pool.query(
         `INSERT INTO users (full_name, email, role, username, password_hash)
          VALUES ($1,$2,'doctor',$3,$4)
@@ -60,4 +60,4 @@ router.post("/doctors", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
