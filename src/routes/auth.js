@@ -7,42 +7,32 @@ const router = express.Router();
 
 
 
+
 router.post("/login", async (req, res) => {
-  const { username, password } = req.body;
-  console.log("LOGIN_ATTEMPT:", username); // لوج بسيط جداً للتأكد من وصول الطلب
-
   try {
-    const result = await pool.query(
-      "SELECT * FROM users WHERE email = $1",
-      [username]
-    );
-    const user = result.rows[0];
+    const { username, password } = req.body;
+    console.log("Login attempt for:", username);
 
-    if (!user) {
-      console.log("USER_NOT_FOUND");
-      return res.status(401).json({ error: "Invalid credentials" });
+    const userRes = await pool.query("SELECT * FROM users WHERE email = $1", [username]);
+    const user = userRes.rows[0];
+
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) return res.status(401).json({ error: "Wrong password" });
+
+    // فحص العيادة - تأكد أن هذا الجدول موجود
+    const clinicRes = await pool.query("SELECT active FROM clinics WHERE id = $1", [user.clinic_id]);
+    if (clinicRes.rows.length === 0 || !clinicRes.rows[0].active) {
+      return res.status(403).json({ error: "Clinic inactive or not found" });
     }
 
-    const match = await bcrypt.compare(password, user.password_hash);
-    console.log("PASSWORD_MATCH:", match);
+    const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
+    return res.json({ token, user: { email: user.email, fullName: user.full_name, role: user.role } });
 
-    if (!match) return res.status(401).json({ error: "Invalid credentials" });
-
-    // فحص العيادة
-    console.log("CLINIC_ID:", user.clinic_id);
-    const clinicRes = await pool.query("SELECT active FROM clinics WHERE id=$1", [user.clinic_id]);
-    
-    if (!clinicRes.rows.length || !clinicRes.rows[0].active) {
-       console.log("CLINIC_INACTIVE_OR_MISSING");
-       return res.status(403).json({ error: "Clinic not active" });
-    }
-
-    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "8h" });
-    res.json({ token, user: { email: user.email, role: user.role } });
-
-  } catch (err) {
-    console.error("AUTH_CRASH:", err);
-    res.status(500).json({ error: "Server Error" });
+  } catch (error) {
+    console.error("Auth Error:", error);
+    return res.status(500).json({ error: "Server Internal Error" });
   }
 });
 
