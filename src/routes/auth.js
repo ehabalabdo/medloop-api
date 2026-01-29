@@ -14,6 +14,7 @@ const pool = new Pool({
 
 router.post("/login", async (req, res) => {
   try {
+    console.log("BODY", req.body);
     const { email, password } = req.body;
     // سطر الفحص: رح يطبع بياناتك في رندر قبل ما يكمل
     const result = await pool.query("SELECT email, role, clinic_id FROM users WHERE email = $1", [email]);

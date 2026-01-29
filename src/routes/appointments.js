@@ -1,10 +1,10 @@
-import express from "express";
-import pool from "../db.js";
-import { auth } from "../middleware/auth.js";
-import { createAppointmentSchema } from "../validation/appointment.js";
+const express = require("express");
+const pool = require("../db.js");
+const { verifyToken } = require("../middleware/auth.js");
+const { createAppointmentSchema } = require("../validation/appointment.js");
 
 const router = express.Router();
-router.use(auth);
+router.use(verifyToken);
 
 // مواعيد اليوم
 router.get("/today", async (req, res) => {
@@ -127,4 +127,4 @@ router.post("/", async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;

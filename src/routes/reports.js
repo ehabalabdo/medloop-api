@@ -1,9 +1,9 @@
-import express from "express";
-import pool from "../db.js";
-import { auth } from "../middleware/auth.js";
+const express = require("express");
+const pool = require("../db.js");
+const { verifyToken } = require("../middleware/auth.js");
 
 const router = express.Router();
-router.use(auth);
+router.use(verifyToken);
 
 // ضغط الأطباء (عدد المواعيد بالأسبوع)
 router.get("/doctor-load", async (req, res) => {
@@ -60,4 +60,4 @@ router.get("/peak-hours", async (req, res) => {
   res.json(rows);
 });
 
-export default router;
+module.exports = router;
