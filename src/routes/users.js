@@ -1,63 +1,46 @@
-const express = require("express");
-const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
-const pool = require("../db.js");
-
-function makeDoctorUsername(name) {
-  return "dr_" + name.toLowerCase().replace(/\s+/g, "");
-}
-
-function makePassword() {
-  return crypto.randomBytes(6).toString("base64url");
-}
-
+const express = require('express');
 const router = express.Router();
+const pool = require('../db');
 
-// إضافة دكتور جديد مع حساب تلقائي
-router.post("/doctors", async (req, res) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
-  const { full_name, email } = req.body;
-  if (!full_name) {
-    return res.status(400).json({ error: "full_name required" });
-  }
-
-  let username = makeDoctorUsername(full_name);
-  let password = makePassword();
-  let password_hash = await bcrypt.hash(password, 10);
-
+// 1. جلب جميع الموظفين (مع اسم العيادة)
+router.get('/', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO users (full_name, email, role, username, password_hash)
-       VALUES ($1,$2,'doctor',$3,$4)
-       RETURNING id, full_name, username`,
-      [full_name, email || null, username, password_hash]
-    );
-    res.status(201).json({
-      doctor: rows[0],
-      credentials: { username, password }
-    });
+    const query = `
+      SELECT users.id, users.name, users.email, users.role, clinics.name as clinic_name 
+      FROM users 
+      LEFT JOIN clinics ON users.clinic_id = clinics.id
+      ORDER BY users.id DESC
+    `;
+    const result = await pool.query(query);
+    res.json(result.rows);
   } catch (err) {
-    if (err.code === "23505") {
-      // أضف 4 أرقام عشوائية إذا كان الاسم مكرر
-      username = username + '-' + Math.floor(1000 + Math.random() * 9000);
-      password = makePassword();
-      password_hash = await bcrypt.hash(password, 10);
-      const { rows } = await pool.query(
-        `INSERT INTO users (full_name, email, role, username, password_hash)
-         VALUES ($1,$2,'doctor',$3,$4)
-         RETURNING id, full_name, username`,
-        [full_name, email || null, username, password_hash]
-      );
-      return res.status(201).json({
-        doctor: rows[0],
-        credentials: { username, password }
-      });
-    }
-    res.status(500).json({ error: "Server error" });
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching users' });
   }
 });
+
+// 2. إضافة موظف جديد (دكتور، سكرتيرة، إلخ)
+router.post('/', async (req, res) => {
+  const { name, email, password, role, clinic_id } = req.body;
+
+  try {
+    // التحقق من التكرار
+    const check = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (check.rows.length > 0) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    const newUser = await pool.query(
+      'INSERT INTO users (name, email, password, role, clinic_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [name, email, password, role, clinic_id]
+    );
+    res.json(newUser.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error creating user' });
+  }
+});
+
+module.exports = router;
 
 module.exports = router;

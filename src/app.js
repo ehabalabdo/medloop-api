@@ -8,6 +8,7 @@ const reportsRouter = require("./routes/reports.js");
 const patientsRouter = require("./routes/patients.js");
 const usersRouter = require("./routes/users.js");
 const authGuard = require("./middleware/authGuard.js");
+const clinicsRouter = require("./routes/clinics.js");
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use("/appointments", appointmentsRouter);
 app.use("/reports", reportsRouter);
 app.use("/patients", patientsRouter);
 app.use("/users", usersRouter);
+app.use("/clinics", clinicsRouter);
 
 app.get("/", (_, res) => res.send("MedLoop API running"));
 
