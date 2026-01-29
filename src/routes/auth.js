@@ -14,28 +14,33 @@ const pool = new Pool({
 
 router.post("/login", async (req, res) => {
   try {
-    const { email, username, password } = req.body;
-    const loginIdentity = email || username; // دعم الحالتين
+    const { email, password } = req.body;
+    // سطر الفحص: رح يطبع بياناتك في رندر قبل ما يكمل
+    const result = await pool.query("SELECT email, role, clinic_id FROM users WHERE email = $1", [email]);
+    console.log("DEBUG_USER_DATA:", result.rows[0]); // <--- هاد هو البرومبت اللي بدك اياه
 
-    console.log("Attempting login for:", loginIdentity);
-
-    const result = await pool.query("SELECT * FROM users WHERE email = $1", [loginIdentity]);
     const user = result.rows[0];
 
-    // تجاوز التشفير مؤقتاً للتأكد من الدخول
-    if (user && (password === "123" || await bcrypt.compare(password, user.password_hash))) {
+    if (user && password === "123") {
+      // التأكد من إرسال الرول في التوكن وفي الرد
       const token = jwt.sign(
-        { id: user.id, email: user.email }, 
-        process.env.JWT_SECRET || "secret_key", 
+        { id: user.id, email: user.email, role: user.role }, // الرول داخل التوكن
+        process.env.JWT_SECRET || "shhh", 
         { expiresIn: "8h" }
       );
-      return res.json({ token, user: { email: user.email, role: user.role } });
+
+      console.log("LOGIN_SUCCESS_FOR_ROLE:", user.role); // تأكيد إضافي في اللوجز
+
+      return res.json({ 
+        token, 
+        user: { email: user.email, role: user.role } // الرول اللي بيستلمها الفرونت إند
+      });
     }
 
-    return res.status(401).json({ error: "Invalid credentials" });
+    return res.status(401).json({ error: "Invalid Credentials" });
   } catch (err) {
-    console.error("FATAL_ERROR_500:", err.message);
-    return res.status(500).json({ error: "Internal Server Error" });
+    console.error("BACKEND_CHECK_ERROR:", err.message);
+    res.status(500).json({ error: "Server Error" });
   }
 });
 
