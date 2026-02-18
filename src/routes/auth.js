@@ -206,7 +206,7 @@ router.post("/hr-login", async (req, res) => {
     const result = await pool.query(
       `SELECT id, client_id, full_name, username, password, status
        FROM hr_employees
-       WHERE username=$1 AND client_id=$2
+       WHERE (username=$1 OR email=$1) AND client_id=$2
        LIMIT 1`,
       [username, client_id]
     );
