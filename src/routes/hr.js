@@ -68,6 +68,31 @@ function requireHrEmployee(req, res) {
 }
 
 // ============================================================
+//  DEBUG: WebAuthn diagnostic (temporary)
+// ============================================================
+router.get("/webauthn/debug", async (req, res) => {
+  const config = rpConfig();
+  const credCount = await pool.query(
+    `SELECT COUNT(*) AS cnt FROM hr_biometric_credentials WHERE employee_id=$1`,
+    [req.user.hr_employee_id || 0]
+  );
+  const challengeCount = await pool.query(
+    `SELECT type, COUNT(*) AS cnt FROM hr_webauthn_challenges WHERE employee_id=$1 GROUP BY type`,
+    [req.user.hr_employee_id || 0]
+  );
+  res.json({
+    NODE_ENV: process.env.NODE_ENV || "(unset)",
+    rpID: config.rpID,
+    expectedOrigin: config.origin,
+    rpName: config.rpName,
+    yourEmployeeId: req.user.hr_employee_id || null,
+    savedCredentials: Number(credCount.rows[0]?.cnt || 0),
+    pendingChallenges: challengeCount.rows,
+    serverTime: new Date().toISOString(),
+  });
+});
+
+// ============================================================
 //  1. CLINIC LOCATION  (admin)
 // ============================================================
 
