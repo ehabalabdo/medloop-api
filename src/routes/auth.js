@@ -193,6 +193,73 @@ router.post("/super-admin/login", async (req, res) => {
 });
 
 /**
+ * POST /auth/hr-login
+ * HR Employee login (separate from staff login)
+ */
+router.post("/hr-login", async (req, res) => {
+  try {
+    const { username, password, client_id } = req.body;
+    if (!username || !password || !client_id) {
+      return res.status(400).json({ error: "username, password, client_id required" });
+    }
+
+    const result = await pool.query(
+      `SELECT id, client_id, full_name, username, password, status
+       FROM hr_employees
+       WHERE username=$1 AND client_id=$2
+       LIMIT 1`,
+      [username, client_id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const emp = result.rows[0];
+    if (emp.status !== "active") {
+      return res.status(403).json({ error: "Account is deactivated" });
+    }
+
+    // bcrypt check (with plaintext fallback for migration)
+    let passwordValid = false;
+    if (emp.password && emp.password.startsWith("$2")) {
+      passwordValid = await bcrypt.compare(password, emp.password);
+    } else {
+      passwordValid = password === emp.password;
+    }
+    if (!passwordValid) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const token = jwt.sign(
+      {
+        id: emp.id,
+        hr_employee_id: emp.id,
+        role: "employee",
+        type: "hr_employee",
+        client_id: emp.client_id,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "12h" }
+    );
+
+    return res.json({
+      token,
+      type: "hr_employee",
+      employee: {
+        id: emp.id,
+        fullName: emp.full_name,
+        username: emp.username,
+        clientId: emp.client_id,
+      },
+    });
+  } catch (err) {
+    console.error("HR login error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/**
  * POST /auth/refresh
  * Refresh an expired JWT access token
  */
