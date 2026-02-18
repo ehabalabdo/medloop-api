@@ -15,7 +15,31 @@ import deviceResultsRouter from "./routes/device-results.js";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// CORS: Allow frontend origins explicitly with credentials support
+app.use(cors({
+  origin: [
+    "https://med.loopjo.com",
+    "http://localhost:5173",
+    "http://localhost:3000"
+  ],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
+// Handle preflight explicitly for ALL routes
+app.options("*", cors({
+  origin: [
+    "https://med.loopjo.com",
+    "http://localhost:5173",
+    "http://localhost:3000"
+  ],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
 app.use(express.json());
 
 // Public routes (no auth)
