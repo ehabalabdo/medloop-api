@@ -460,7 +460,7 @@ router.post("/webauthn/register/options", async (req, res) => {
       authenticatorSelection: {
         authenticatorAttachment: "platform",
         userVerification: "required",
-        residentKey: "preferred",
+        residentKey: "discouraged",
       },
       attestationType: "none",
     });
