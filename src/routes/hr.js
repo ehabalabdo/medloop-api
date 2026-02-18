@@ -374,12 +374,8 @@ router.get("/me", async (req, res) => {
       [hr_employee_id, client_id]
     );
 
-    // Biometric count
-    const bio = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM hr_biometric_credentials
-       WHERE employee_id=$1 AND client_id=$2`,
-      [hr_employee_id, client_id]
-    );
+    // PIN set?
+    const hasPIN = !!e.pin_hash;
 
     // Today attendance
     const today = await pool.query(
@@ -395,8 +391,7 @@ router.get("/me", async (req, res) => {
       phone: e.phone,
       email: e.email,
       status: e.status,
-      bioRegistered: Number(bio.rows[0].cnt) > 0,
-      bioCount: Number(bio.rows[0].cnt),
+      pinSet: hasPIN,
       schedule: sched.rows[0]
         ? {
             workDays: sched.rows[0].work_days,
@@ -424,7 +419,32 @@ router.get("/me", async (req, res) => {
 });
 
 // ============================================================
-//  4. WEBAUTHN  REGISTER  (hr_employee)
+//  4. PIN CODE  (hr_employee)
+// ============================================================
+
+/** POST /hr/me/set-pin — set/update employee's 4-digit PIN */
+router.post("/me/set-pin", async (req, res) => {
+  if (!requireHrEmployee(req, res)) return;
+  try {
+    const { hr_employee_id, client_id } = req.user;
+    const { pin } = req.body;
+    if (!pin || !/^\d{4,6}$/.test(pin)) {
+      return res.status(400).json({ error: "PIN must be 4-6 digits" });
+    }
+    const hash = await bcrypt.hash(pin, 10);
+    await pool.query(
+      `UPDATE hr_employees SET pin_hash=$1, updated_at=NOW() WHERE id=$2 AND client_id=$3`,
+      [hash, hr_employee_id, client_id]
+    );
+    res.json({ success: true, message: "PIN set successfully" });
+  } catch (err) {
+    console.error("POST /hr/me/set-pin error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
+//  4b. WEBAUTHN (legacy — kept for reference)
 // ============================================================
 
 /** POST /hr/webauthn/register/options */
@@ -756,13 +776,21 @@ router.post("/attendance/check-in", async (req, res) => {
       return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
     }
 
-    // Check biometric registered
-    const bio = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM hr_biometric_credentials WHERE employee_id=$1`,
-      [hr_employee_id]
+    // Verify PIN
+    const { pin } = req.body;
+    if (!pin) {
+      return res.status(400).json({ error: "PIN_REQUIRED", message: "PIN is required for check-in" });
+    }
+    const emp = await pool.query(
+      `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
+      [hr_employee_id, client_id]
     );
-    if (Number(bio.rows[0].cnt) === 0) {
-      return res.status(400).json({ error: "NO_BIOMETRIC", message: "Register biometrics first" });
+    if (!emp.rows[0]?.pin_hash) {
+      return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
+    }
+    const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
+    if (!pinOk) {
+      return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
     }
 
     // Check if already checked in today
@@ -825,6 +853,23 @@ router.post("/attendance/check-out", async (req, res) => {
     const geo = await validateGeoFence(client_id, latitude, longitude);
     if (!geo.ok) {
       return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
+    }
+
+    // Verify PIN
+    const { pin } = req.body;
+    if (!pin) {
+      return res.status(400).json({ error: "PIN_REQUIRED", message: "PIN is required for check-out" });
+    }
+    const emp = await pool.query(
+      `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
+      [hr_employee_id, client_id]
+    );
+    if (!emp.rows[0]?.pin_hash) {
+      return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
+    }
+    const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
+    if (!pinOk) {
+      return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
     }
 
     // Must have checked in today
