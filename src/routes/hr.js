@@ -621,10 +621,9 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
 
     const options = await generateAuthenticationOptions({
       rpID,
-      allowCredentials: creds.rows.map((r) => ({
-        id: r.credential_id,
-        type: "public-key",
-      })),
+      // Empty allowCredentials → discoverable credential flow
+      // Chrome auto-finds passkeys for this rpID → simpler UI
+      allowCredentials: [],
       userVerification: "required",
     });
 
