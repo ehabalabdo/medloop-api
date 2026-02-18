@@ -514,7 +514,7 @@ router.post("/webauthn/register/options", async (req, res) => {
       authenticatorSelection: {
         authenticatorAttachment: "platform",   // LOCAL device only (Face ID / Fingerprint)
         userVerification: "required",
-        residentKey: "required",               // DISCOVERABLE — browser can find it on its own
+        residentKey: "preferred",              // Prefer discoverable but don't fail if not possible
       },
       attestationType: "none",
     });
