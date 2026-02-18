@@ -18,14 +18,11 @@ function makePassword() {
 /**
  * GET /users
  * List all users for the current client
- * Admin only
+ * All authenticated users can read (needed for doctor lists in appointments, etc.)
  */
 router.get("/", async (req, res) => {
   try {
     const { role, client_id } = req.user;
-    if (!["admin", "super_admin"].includes(role)) {
-      return res.status(403).json({ error: "Forbidden" });
-    }
 
     const query = client_id
       ? `SELECT id, full_name, email, role, clinic_id, clinic_ids, client_id, is_active, is_archived,
