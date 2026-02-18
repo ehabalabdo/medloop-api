@@ -664,13 +664,21 @@ router.post("/webauthn/authenticate/verify", async (req, res) => {
       [verification.authenticationInfo.newCounter, storedCred.id]
     );
 
-    // Cleanup
+    // Cleanup authenticate challenge
     await pool.query(
       `DELETE FROM hr_webauthn_challenges WHERE employee_id=$1 AND type='authenticate'`,
       [hr_employee_id]
     );
 
-    res.json({ verified: true });
+    // Generate a one-time bioToken (2 min expiry) for use in check-in/check-out
+    const bioToken = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO hr_webauthn_challenges (employee_id, challenge, type, expires_at)
+       VALUES ($1, $2, 'bio_token', NOW() + interval '2 minutes')`,
+      [hr_employee_id, bioToken]
+    );
+
+    res.json({ verified: true, bioToken });
   } catch (err) {
     console.error("POST /hr/webauthn/authenticate/verify error:", err);
     res.status(500).json({ error: "Server error" });
@@ -785,24 +793,19 @@ router.post("/attendance/check-in", async (req, res) => {
       return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
     }
 
-    // Verify identity: bio_verified flag (set by frontend after WebAuthn) OR PIN
-    const { pin, bio_verified } = req.body;
-    if (!bio_verified) {
-      // Fallback to PIN
-      if (!pin) {
-        return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric or PIN required" });
-      }
-      const emp = await pool.query(
-        `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
-        [hr_employee_id, client_id]
-      );
-      if (!emp.rows[0]?.pin_hash) {
-        return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
-      }
-      const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
-      if (!pinOk) {
-        return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
-      }
+    // Verify identity via bioToken (one-time, from WebAuthn authenticate/verify)
+    const { bioToken } = req.body;
+    if (!bioToken) {
+      return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
+    }
+    const tokenCheck = await pool.query(
+      `DELETE FROM hr_webauthn_challenges
+       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
+       RETURNING id`,
+      [hr_employee_id, bioToken]
+    );
+    if (!tokenCheck.rows.length) {
+      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid. Please verify again." });
     }
 
     // Check if already checked in today
@@ -867,23 +870,19 @@ router.post("/attendance/check-out", async (req, res) => {
       return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
     }
 
-    // Verify identity: bio_verified OR PIN
-    const { pin, bio_verified } = req.body;
-    if (!bio_verified) {
-      if (!pin) {
-        return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric or PIN required" });
-      }
-      const emp = await pool.query(
-        `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
-        [hr_employee_id, client_id]
-      );
-      if (!emp.rows[0]?.pin_hash) {
-        return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
-      }
-      const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
-      if (!pinOk) {
-        return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
-      }
+    // Verify identity via bioToken (one-time, from WebAuthn authenticate/verify)
+    const { bioToken } = req.body;
+    if (!bioToken) {
+      return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
+    }
+    const tokenCheck = await pool.query(
+      `DELETE FROM hr_webauthn_challenges
+       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
+       RETURNING id`,
+      [hr_employee_id, bioToken]
+    );
+    if (!tokenCheck.rows.length) {
+      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid. Please verify again." });
     }
 
     // Must have checked in today
