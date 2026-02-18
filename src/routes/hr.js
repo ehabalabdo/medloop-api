@@ -668,27 +668,49 @@ router.post("/webauthn/authenticate/verify", async (req, res) => {
 
     // Find credential
     const credIdFromBody = req.body.id; // base64url credential id
+    console.log("[WebAuthn Auth Verify] Looking for credential:", credIdFromBody?.slice(0, 30));
+    
     const cred = await pool.query(
       `SELECT * FROM hr_biometric_credentials
        WHERE employee_id=$1 AND credential_id=$2`,
       [hr_employee_id, credIdFromBody]
     );
-    if (!cred.rows.length) return res.status(400).json({ error: "Credential not found" });
+    
+    if (!cred.rows.length) {
+      // Log all stored credential IDs for debugging
+      const allCreds = await pool.query(
+        `SELECT credential_id FROM hr_biometric_credentials WHERE employee_id=$1`,
+        [hr_employee_id]
+      );
+      console.error("[WebAuthn Auth Verify] Credential NOT FOUND. Body id:", credIdFromBody);
+      console.error("[WebAuthn Auth Verify] Stored credentials:", allCreds.rows.map(r => r.credential_id));
+      return res.status(400).json({ error: "Credential not found", code: "CRED_NOT_FOUND" });
+    }
 
     const storedCred = cred.rows[0];
+    console.log("[WebAuthn Auth Verify] Found credential id:", storedCred.id, "counter:", storedCred.counter);
 
-    const verification = await verifyAuthenticationResponse({
-      response: req.body,
-      expectedChallenge: ch.rows[0].challenge,
-      expectedOrigin: origin,
-      expectedRPID: rpID,
-      credential: {
-        id: storedCred.credential_id,
-        publicKey: Buffer.from(storedCred.public_key, "base64url"),
-        counter: Number(storedCred.counter),
-        transports: storedCred.transports || [],
-      },
-    });
+    let verification;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: req.body,
+        expectedChallenge: ch.rows[0].challenge,
+        expectedOrigin: origin,
+        expectedRPID: rpID,
+        credential: {
+          id: storedCred.credential_id,
+          publicKey: Buffer.from(storedCred.public_key, "base64url"),
+          counter: Number(storedCred.counter),
+          transports: storedCred.transports || [],
+        },
+      });
+    } catch (verifyErr) {
+      console.error("[WebAuthn Auth Verify] VERIFY THREW ERROR:", verifyErr.message);
+      console.error("[WebAuthn Auth Verify] rpID:", rpID, "origin:", origin);
+      return res.status(400).json({ error: "Biometric verification failed: " + verifyErr.message });
+    }
+
+    console.log("[WebAuthn Auth Verify] verified:", verification.verified);
 
     if (!verification.verified) {
       return res.status(400).json({ error: "Biometric verification failed" });
