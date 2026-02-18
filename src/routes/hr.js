@@ -585,7 +585,7 @@ router.post("/webauthn/register/verify", async (req, res) => {
         Buffer.from(credential.id).toString("base64url"),
         Buffer.from(credential.publicKey).toString("base64url"),
         credential.counter,
-        JSON.stringify(req.body.response?.transports || []),
+        JSON.stringify((req.body.response?.transports || []).filter(t => t === 'internal')),
         req.body.deviceName || credentialDeviceType || "Unknown",
       ]
     );
@@ -628,7 +628,8 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
       allowCredentials: creds.rows.map((r) => ({
         id: r.credential_id,
         type: "public-key",
-        transports: r.transports || ["internal"],
+        // FORCE internal-only → prevents Chrome from showing QR/hybrid dialog
+        transports: ["internal"],
       })),
       userVerification: "required",
     });
