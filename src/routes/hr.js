@@ -602,6 +602,31 @@ router.post("/webauthn/register/verify", async (req, res) => {
 });
 
 // ============================================================
+//  4c. RESET BIOMETRIC  (hr_employee)
+// ============================================================
+
+/** DELETE /hr/webauthn/reset — clears all credentials for this employee */
+router.delete("/webauthn/reset", async (req, res) => {
+  if (!requireHrEmployee(req, res)) return;
+  try {
+    const { hr_employee_id } = req.user;
+    const del = await pool.query(
+      `DELETE FROM hr_biometric_credentials WHERE employee_id=$1`,
+      [hr_employee_id]
+    );
+    await pool.query(
+      `DELETE FROM hr_webauthn_challenges WHERE employee_id=$1`,
+      [hr_employee_id]
+    );
+    console.log("[WebAuthn Reset] Cleared", del.rowCount, "credentials for employee:", hr_employee_id);
+    res.json({ cleared: del.rowCount });
+  } catch (err) {
+    console.error("DELETE /hr/webauthn/reset error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
 //  5. WEBAUTHN  AUTHENTICATE  (hr_employee)
 // ============================================================
 
@@ -622,9 +647,12 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
 
     const options = await generateAuthenticationOptions({
       rpID,
-      // EMPTY allowCredentials → discoverable credential flow
-      // Browser finds the passkey for this rpID itself → no credential ID mismatch
-      allowCredentials: [],
+      // Send stored credential IDs so browser picks ONLY passkeys that exist in our DB
+      allowCredentials: creds.rows.map((r) => ({
+        id: r.credential_id,
+        type: "public-key",
+        transports: r.transports || ["internal"],
+      })),
       userVerification: "required",
     });
 
