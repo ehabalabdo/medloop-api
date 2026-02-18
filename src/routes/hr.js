@@ -512,8 +512,9 @@ router.post("/webauthn/register/options", async (req, res) => {
         type: "public-key",
       })),
       authenticatorSelection: {
+        authenticatorAttachment: "platform",   // LOCAL device only (Face ID / Fingerprint)
         userVerification: "required",
-        residentKey: "preferred",
+        residentKey: "discouraged",             // No passkey manager needed
       },
       attestationType: "none",
     });
@@ -621,9 +622,13 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
 
     const options = await generateAuthenticationOptions({
       rpID,
-      // Empty allowCredentials → discoverable credential flow
-      // Chrome auto-finds passkeys for this rpID → simpler UI
-      allowCredentials: [],
+      // Send actual credential IDs with internal transport
+      // This tells the browser EXACTLY which credentials to look for → direct biometric prompt
+      allowCredentials: creds.rows.map((r) => ({
+        id: r.credential_id,
+        type: "public-key",
+        transports: ["internal"],  // Forces local biometric, prevents QR/hybrid dialog
+      })),
       userVerification: "required",
     });
 
