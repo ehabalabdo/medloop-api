@@ -512,15 +512,11 @@ router.post("/webauthn/register/options", async (req, res) => {
         type: "public-key",
       })),
       authenticatorSelection: {
-        authenticatorAttachment: "platform",
         userVerification: "required",
-        residentKey: "discouraged",
+        residentKey: "preferred",
       },
       attestationType: "none",
     });
-
-    // Add hints for Chrome 118+ to prefer local platform authenticator
-    options.hints = ["client-device"];
 
     console.log("[WebAuthn Reg Options] rpID:", rpID, "employee:", e.username, "challenge:", options.challenge?.slice(0, 10) + "...");
 
@@ -585,7 +581,7 @@ router.post("/webauthn/register/verify", async (req, res) => {
         Buffer.from(credential.id).toString("base64url"),
         Buffer.from(credential.publicKey).toString("base64url"),
         credential.counter,
-        JSON.stringify((req.body.response?.transports || []).filter(t => t === 'internal')),
+        JSON.stringify(req.body.response?.transports || []),
         req.body.deviceName || credentialDeviceType || "Unknown",
       ]
     );
@@ -628,14 +624,9 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
       allowCredentials: creds.rows.map((r) => ({
         id: r.credential_id,
         type: "public-key",
-        // FORCE internal-only → prevents Chrome from showing QR/hybrid dialog
-        transports: ["internal"],
       })),
       userVerification: "required",
     });
-
-    // Add hints for Chrome 118+ to prefer local platform authenticator
-    options.hints = ["client-device"];
 
     console.log("[WebAuthn Auth Options] rpID:", rpID, "creds:", creds.rows.length, "employee:", hr_employee_id);
 
