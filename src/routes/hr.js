@@ -564,9 +564,9 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
       allowCredentials: creds.rows.map((r) => ({
         id: r.credential_id,
         type: "public-key",
-        transports: r.transports || [],
+        transports: r.transports || ["internal"],
       })),
-      userVerification: "preferred",
+      userVerification: "required",
     });
 
     await pool.query(
