@@ -570,7 +570,13 @@ router.post("/webauthn/register/verify", async (req, res) => {
     }
 
     const { credential, credentialDeviceType } = verification.registrationInfo;
-    console.log("[WebAuthn Reg Verify] credentialId:", Buffer.from(credential.id).toString("base64url").slice(0, 20) + "...", "type:", credentialDeviceType);
+    // In @simplewebauthn/server v10+, credential.id is ALREADY a Base64URLString (string).
+    // credential.publicKey is Uint8Array and needs Buffer conversion.
+    const credIdB64 = typeof credential.id === "string"
+      ? credential.id
+      : Buffer.from(credential.id).toString("base64url");
+    const pubKeyB64 = Buffer.from(credential.publicKey).toString("base64url");
+    console.log("[WebAuthn Reg Verify] credentialId:", credIdB64.slice(0, 20) + "...", "type:", credentialDeviceType, "idType:", typeof credential.id);
 
     await pool.query(
       `INSERT INTO hr_biometric_credentials
@@ -579,8 +585,8 @@ router.post("/webauthn/register/verify", async (req, res) => {
       [
         client_id,
         hr_employee_id,
-        Buffer.from(credential.id).toString("base64url"),
-        Buffer.from(credential.publicKey).toString("base64url"),
+        credIdB64,
+        pubKeyB64,
         credential.counter,
         JSON.stringify(req.body.response?.transports || []),
         req.body.deviceName || credentialDeviceType || "Unknown",
