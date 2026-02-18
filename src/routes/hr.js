@@ -458,7 +458,8 @@ router.post("/webauthn/register/options", async (req, res) => {
         type: "public-key",
       })),
       authenticatorSelection: {
-        userVerification: "preferred",
+        authenticatorAttachment: "platform",
+        userVerification: "required",
         residentKey: "preferred",
       },
       attestationType: "none",
