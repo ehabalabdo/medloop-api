@@ -588,7 +588,7 @@ router.post("/webauthn/register/verify", async (req, res) => {
         credIdB64,
         pubKeyB64,
         credential.counter,
-        JSON.stringify(req.body.response?.transports || []),
+        JSON.stringify((req.body.response?.transports || []).filter(t => t !== "hybrid")),
         req.body.deviceName || credentialDeviceType || "Unknown",
       ]
     );
@@ -657,7 +657,8 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
       allowCredentials: creds.rows.map((r) => ({
         id: r.credential_id,
         type: "public-key",
-        transports: r.transports || ["internal"],
+        // ONLY "internal" — never "hybrid" which triggers QR popup
+        transports: ["internal"],
       })),
       userVerification: "required",
     });
