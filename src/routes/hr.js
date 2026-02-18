@@ -494,6 +494,11 @@ router.post("/webauthn/register/options", async (req, res) => {
       attestationType: "none",
     });
 
+    // Add hints for Chrome 118+ to prefer local platform authenticator
+    options.hints = ["client-device"];
+
+    console.log("[WebAuthn Reg Options] rpID:", rpID, "employee:", e.username, "challenge:", options.challenge?.slice(0, 10) + "...");
+
     // Store challenge
     await pool.query(
       `DELETE FROM hr_webauthn_challenges WHERE employee_id=$1 AND type='register'`,
@@ -535,11 +540,15 @@ router.post("/webauthn/register/verify", async (req, res) => {
       expectedRPID: rpID,
     });
 
+    console.log("[WebAuthn Reg Verify] verified:", verification.verified, "rpID:", rpID, "origin:", origin);
+
     if (!verification.verified || !verification.registrationInfo) {
+      console.error("[WebAuthn Reg Verify] FAILED — verified:", verification.verified);
       return res.status(400).json({ error: "Verification failed" });
     }
 
     const { credential, credentialDeviceType } = verification.registrationInfo;
+    console.log("[WebAuthn Reg Verify] credentialId:", Buffer.from(credential.id).toString("base64url").slice(0, 20) + "...", "type:", credentialDeviceType);
 
     await pool.query(
       `INSERT INTO hr_biometric_credentials
@@ -562,6 +571,7 @@ router.post("/webauthn/register/verify", async (req, res) => {
       [hr_employee_id]
     );
 
+    console.log("[WebAuthn Reg Verify] SUCCESS — credential saved for employee:", hr_employee_id);
     res.json({ verified: true });
   } catch (err) {
     console.error("POST /hr/webauthn/register/verify error:", err);
@@ -597,6 +607,11 @@ router.post("/webauthn/authenticate/options", async (req, res) => {
       })),
       userVerification: "required",
     });
+
+    // Add hints for Chrome 118+ to prefer local platform authenticator
+    options.hints = ["client-device"];
+
+    console.log("[WebAuthn Auth Options] rpID:", rpID, "creds:", creds.rows.length, "employee:", hr_employee_id);
 
     await pool.query(
       `DELETE FROM hr_webauthn_challenges WHERE employee_id=$1 AND type='authenticate'`,
