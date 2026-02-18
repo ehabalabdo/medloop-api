@@ -377,6 +377,13 @@ router.get("/me", async (req, res) => {
     // PIN set?
     const hasPIN = !!e.pin_hash;
 
+    // Biometric count
+    const bio = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM hr_biometric_credentials
+       WHERE employee_id=$1 AND client_id=$2`,
+      [hr_employee_id, client_id]
+    );
+
     // Today attendance
     const today = await pool.query(
       `SELECT * FROM hr_attendance
@@ -392,6 +399,8 @@ router.get("/me", async (req, res) => {
       email: e.email,
       status: e.status,
       pinSet: hasPIN,
+      bioRegistered: Number(bio.rows[0].cnt) > 0,
+      bioCount: Number(bio.rows[0].cnt),
       schedule: sched.rows[0]
         ? {
             workDays: sched.rows[0].work_days,
@@ -444,7 +453,7 @@ router.post("/me/set-pin", async (req, res) => {
 });
 
 // ============================================================
-//  4b. WEBAUTHN (legacy — kept for reference)
+//  4b. WEBAUTHN  REGISTER  (hr_employee)
 // ============================================================
 
 /** POST /hr/webauthn/register/options */
@@ -776,21 +785,24 @@ router.post("/attendance/check-in", async (req, res) => {
       return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
     }
 
-    // Verify PIN
-    const { pin } = req.body;
-    if (!pin) {
-      return res.status(400).json({ error: "PIN_REQUIRED", message: "PIN is required for check-in" });
-    }
-    const emp = await pool.query(
-      `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
-      [hr_employee_id, client_id]
-    );
-    if (!emp.rows[0]?.pin_hash) {
-      return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
-    }
-    const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
-    if (!pinOk) {
-      return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
+    // Verify identity: bio_verified flag (set by frontend after WebAuthn) OR PIN
+    const { pin, bio_verified } = req.body;
+    if (!bio_verified) {
+      // Fallback to PIN
+      if (!pin) {
+        return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric or PIN required" });
+      }
+      const emp = await pool.query(
+        `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
+        [hr_employee_id, client_id]
+      );
+      if (!emp.rows[0]?.pin_hash) {
+        return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
+      }
+      const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
+      if (!pinOk) {
+        return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
+      }
     }
 
     // Check if already checked in today
@@ -855,21 +867,23 @@ router.post("/attendance/check-out", async (req, res) => {
       return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
     }
 
-    // Verify PIN
-    const { pin } = req.body;
-    if (!pin) {
-      return res.status(400).json({ error: "PIN_REQUIRED", message: "PIN is required for check-out" });
-    }
-    const emp = await pool.query(
-      `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
-      [hr_employee_id, client_id]
-    );
-    if (!emp.rows[0]?.pin_hash) {
-      return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
-    }
-    const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
-    if (!pinOk) {
-      return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
+    // Verify identity: bio_verified OR PIN
+    const { pin, bio_verified } = req.body;
+    if (!bio_verified) {
+      if (!pin) {
+        return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric or PIN required" });
+      }
+      const emp = await pool.query(
+        `SELECT pin_hash FROM hr_employees WHERE id=$1 AND client_id=$2`,
+        [hr_employee_id, client_id]
+      );
+      if (!emp.rows[0]?.pin_hash) {
+        return res.status(400).json({ error: "NO_PIN", message: "Set your PIN first" });
+      }
+      const pinOk = await bcrypt.compare(pin, emp.rows[0].pin_hash);
+      if (!pinOk) {
+        return res.status(401).json({ error: "WRONG_PIN", message: "Incorrect PIN" });
+      }
     }
 
     // Must have checked in today
