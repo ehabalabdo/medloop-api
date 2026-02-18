@@ -1,10 +1,8 @@
-const { z } = require("zod");
+import { z } from "zod";
 
-const createAppointmentSchema = z.object({
+export const createAppointmentSchema = z.object({
   patient_id: z.number(),
   doctor_id: z.number(),
   start_time: z.string().datetime(),
   end_time: z.string().datetime()
 });
-
-module.exports = { createAppointmentSchema };

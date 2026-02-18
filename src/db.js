@@ -1,13 +1,9 @@
-
-const dotenv = require("dotenv");
-dotenv.config();
-const { Pool } = require("pg");
+import pkg from "pg";
+const { Pool } = pkg;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // ضروري لـ Neon وموفري Postgres السحابيين
-  }
+  ssl: true,
 });
 
-module.exports = pool;
+export default pool;

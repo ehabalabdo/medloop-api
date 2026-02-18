@@ -1,53 +1,214 @@
+import express from "express";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
+import pool from "../db.js";
 
-
-const express = require("express");
-const jwt = require("jsonwebtoken");
-const { Pool } = require("pg"); // اتصال مباشر
-const bcrypt = require("bcryptjs");
 const router = express.Router();
 
-// الاتصال المباشر بـ Neon لضمان عمل pool.query
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-
+/**
+ * POST /auth/login
+ * Accepts { username, password, client_id? }
+ * Checks users table then patients table
+ * Returns JWT with user info
+ */
 router.post("/login", async (req, res) => {
   try {
-    console.log("BODY", req.body);
-    const { email, password } = req.body;
-    // سطر الفحص: رح يطبع بياناتك في رندر قبل ما يكمل
+    const { username, password, client_id } = req.body;
 
-    const result = await pool.query("SELECT id, email, role, clinic_id FROM users WHERE email = $1", [email]);
-    console.log("DEBUG_USER_DATA:", result.rows[0]);
+    if (!username || !password) {
+      return res.status(400).json({ error: "username and password required" });
+    }
 
-    const user = result.rows[0];
+    // 1) Check users table (staff: admin, doctor, receptionist, etc.)
+    const staffQuery = client_id
+      ? `SELECT id, full_name, email, password, role, clinic_id, clinic_ids, client_id, is_active
+         FROM users
+         WHERE (full_name=$1 OR email=$1)
+           AND client_id=$2
+         LIMIT 1`
+      : `SELECT id, full_name, email, password, role, clinic_id, clinic_ids, client_id, is_active
+         FROM users
+         WHERE (full_name=$1 OR email=$1)
+         LIMIT 1`;
 
-    if (user && password === "123") {
+    const staffParams = client_id ? [username, client_id] : [username];
+    const staff = await pool.query(staffQuery, staffParams);
+
+    if (staff.rows.length) {
+      const user = staff.rows[0];
+
+      if (user.is_active === false) {
+        return res.status(403).json({ error: "Account is deactivated" });
+      }
+
+      // Support both bcrypt-hashed and plaintext passwords (migration period)
+      let passwordValid = false;
+      if (user.password && user.password.startsWith("$2")) {
+        passwordValid = await bcrypt.compare(password, user.password);
+      } else {
+        passwordValid = password === user.password;
+      }
+
+      if (!passwordValid) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      // Parse clinic_ids
+      let clinicIds = [];
+      try {
+        clinicIds = typeof user.clinic_ids === "string"
+          ? JSON.parse(user.clinic_ids)
+          : user.clinic_ids || [];
+      } catch { clinicIds = []; }
+
       const token = jwt.sign(
-        { id: user.id, email: user.email, role: user.role },
-        process.env.JWT_SECRET || "shhh", 
+        {
+          id: user.id,
+          role: user.role,
+          type: "staff",
+          client_id: user.client_id,
+          clinic_id: user.clinic_id,
+        },
+        process.env.JWT_SECRET,
         { expiresIn: "8h" }
       );
 
-      console.log("LOGIN_SUCCESS_FOR_ROLE:", user.role);
-
-      return res.json({ 
-        token, 
-        user: { 
-          id: user.id,
-          email: user.email, 
+      return res.json({
+        token,
+        type: "staff",
+        user: {
+          uid: String(user.id),
+          name: user.full_name,
+          email: user.email,
           role: user.role,
-          clinic_id: user.clinic_id
-        }
+          clinicIds,
+          clientId: user.client_id,
+          isActive: user.is_active !== false,
+        },
       });
     }
 
-    return res.status(401).json({ error: "Invalid Credentials" });
+    // 2) Check patients table
+    const patientQuery = client_id
+      ? `SELECT id, full_name, phone, email, username, password, has_access, client_id,
+                date_of_birth, gender, age, medical_profile, current_visit, history
+         FROM patients
+         WHERE (username=$1 OR phone=$1 OR full_name=$1 OR email=$1)
+           AND has_access=true
+           AND client_id=$2
+         LIMIT 1`
+      : `SELECT id, full_name, phone, email, username, password, has_access, client_id,
+                date_of_birth, gender, age, medical_profile, current_visit, history
+         FROM patients
+         WHERE (username=$1 OR phone=$1 OR full_name=$1 OR email=$1)
+           AND has_access=true
+         LIMIT 1`;
+
+    const patientParams = client_id ? [username, client_id] : [username];
+    const patient = await pool.query(patientQuery, patientParams);
+
+    if (patient.rows.length) {
+      const p = patient.rows[0];
+
+      // Support both bcrypt-hashed and plaintext passwords
+      let passwordValid = false;
+      if (p.password && p.password.startsWith("$2")) {
+        passwordValid = await bcrypt.compare(password, p.password);
+      } else {
+        passwordValid = password === p.password;
+      }
+
+      if (!passwordValid) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      const token = jwt.sign(
+        {
+          patient_id: p.id,
+          type: "patient",
+          client_id: p.client_id,
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "8h" }
+      );
+
+      return res.json({
+        token,
+        type: "patient",
+        patient: {
+          id: String(p.id),
+          name: p.full_name,
+          phone: p.phone,
+          email: p.email,
+          username: p.username,
+          clientId: p.client_id,
+        },
+      });
+    }
+
+    res.status(401).json({ error: "Invalid credentials" });
   } catch (err) {
-    console.error("BACKEND_CHECK_ERROR:", err.message);
-    res.status(500).json({ error: "Server Error" });
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-module.exports = router;
+/**
+ * POST /auth/super-admin/login
+ * For platform super admin login
+ */
+router.post("/super-admin/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "username and password required" });
+    }
+
+    const result = await pool.query(
+      "SELECT id, username, name FROM super_admins WHERE username=$1 AND password=$2 LIMIT 1",
+      [username, password]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const admin = result.rows[0];
+    const token = jwt.sign(
+      { id: admin.id, type: "super_admin", role: "super_admin" },
+      process.env.JWT_SECRET,
+      { expiresIn: "8h" }
+    );
+
+    return res.json({
+      token,
+      type: "super_admin",
+      admin: { id: admin.id, username: admin.username, name: admin.name },
+    });
+  } catch (err) {
+    console.error("Super admin login error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/**
+ * POST /auth/refresh
+ * Refresh an expired JWT access token
+ */
+router.post("/refresh", (req, res) => {
+  const { token } = req.body;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Remove iat/exp from old token before re-signing
+    const { iat, exp, ...payload } = decoded;
+    const newAccess = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "8h",
+    });
+    res.json({ token: newAccess });
+  } catch {
+    res.status(401).json({ error: "Invalid refresh token" });
+  }
+});
+
+export default router;

@@ -1,6 +1,6 @@
-const jwt = require("jsonwebtoken");
+import jwt from "jsonwebtoken";
 
-function authGuard(req, res, next) {
+export function authGuard(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -14,5 +14,3 @@ function authGuard(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 }
-
-module.exports = authGuard;
