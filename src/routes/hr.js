@@ -1,6 +1,8 @@
 import express from "express";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
+import PDFDocument from "pdfkit";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import {
@@ -11,6 +13,139 @@ import {
 } from "@simplewebauthn/server";
 
 const router = express.Router();
+
+// PDF route BEFORE global auth — handles its own token via query param
+router.get("/payslips/:id/pdf", async (req, res) => {
+  try {
+    const token = req.query.token || (req.headers.authorization && req.headers.authorization.split(" ")[1]);
+    if (!token) return res.status(401).json({ error: "No token provided" });
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    const { client_id } = decoded;
+    const { id } = req.params;
+
+    const { rows } = await pool.query(
+      `SELECT p.*, e.full_name AS employee_name, e.department, e.job_title
+       FROM hr_payslips p
+       JOIN hr_employees e ON e.id = p.employee_id
+       WHERE p.id=$1 AND p.client_id=$2`,
+      [id, client_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Payslip not found" });
+    const p = rows[0];
+
+    const clientRes = await pool.query(`SELECT name FROM clients WHERE id=$1`, [client_id]);
+    const clientName = clientRes.rows.length ? clientRes.rows[0].name : 'MED LOOP';
+
+    const monthDate = new Date(p.month);
+    const monthLabel = monthDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="payslip-${id}-${monthLabel.replace(/\s/g, '-')}.pdf"`);
+    doc.pipe(res);
+
+    const basicSalary = parseFloat(p.basic_salary);
+    const employeeSs = parseFloat(p.employee_ss);
+    const employerSs = parseFloat(p.employer_ss);
+    const lateAmount = parseFloat(p.final_late_amount);
+    const absenceAmount = parseFloat(p.final_absence_amount);
+    const overtimeAmount = parseFloat(p.final_overtime_amount) * parseFloat(p.overtime_multiplier);
+    const manualDeductions = parseFloat(p.manual_deductions_total);
+    const netSalary = parseFloat(p.net_salary);
+
+    // Header
+    doc.fontSize(20).font('Helvetica-Bold').text(clientName.toUpperCase(), { align: 'center' });
+    doc.fontSize(10).font('Helvetica').text('Payslip / Salary Statement', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(12).font('Helvetica-Bold').text(monthLabel, { align: 'center' });
+    doc.moveDown(1);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#cccccc');
+    doc.moveDown(0.5);
+
+    // Employee Info
+    doc.fontSize(11).font('Helvetica-Bold').text('Employee Information', { underline: true });
+    doc.moveDown(0.3);
+    doc.font('Helvetica').fontSize(10);
+    const infoY = doc.y;
+    doc.text(`Name: ${p.employee_name}`, 50, infoY);
+    doc.text(`Department: ${p.department || '-'}`, 300, infoY);
+    doc.text(`Job Title: ${p.job_title || '-'}`, 50, infoY + 18);
+    doc.text(`Status: ${(p.status || 'draft').toUpperCase()}`, 300, infoY + 18);
+    doc.moveDown(2.5);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#cccccc');
+    doc.moveDown(0.5);
+
+    // Attendance Summary
+    doc.fontSize(11).font('Helvetica-Bold').text('Attendance Summary', { underline: true });
+    doc.moveDown(0.3);
+    doc.font('Helvetica').fontSize(10);
+    const attY = doc.y;
+    doc.text(`Days Worked: ${p.days_worked || 0}`, 50, attY);
+    doc.text(`Absent Days: ${p.suggested_absent_days || 0}`, 200, attY);
+    doc.text(`Late Minutes: ${p.suggested_late_minutes || 0}`, 350, attY);
+    doc.text(`OT Minutes: ${p.suggested_overtime_minutes || 0}`, 50, attY + 18);
+    doc.text(`Break Minutes: ${p.total_break_minutes || 0}`, 200, attY + 18);
+    doc.moveDown(2.5);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#cccccc');
+    doc.moveDown(0.5);
+
+    // Financial Breakdown
+    doc.fontSize(11).font('Helvetica-Bold').text('Financial Breakdown', { underline: true });
+    doc.moveDown(0.5);
+
+    const tableX = 60;
+    const valX = 420;
+    let rowY = doc.y;
+    const rowH = 22;
+
+    function drawRow(label, value, bold, color) {
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10);
+      if (color) doc.fillColor(color);
+      doc.text(label, tableX, rowY);
+      doc.text(value, valX, rowY, { align: 'right', width: 100 });
+      doc.fillColor('#000000');
+      rowY += rowH;
+    }
+
+    doc.rect(tableX - 5, rowY - 3, 480, rowH).fill('#f1f5f9');
+    doc.fillColor('#000000');
+    drawRow('Description', 'Amount (JOD)', true);
+    drawRow('Basic Salary', basicSalary.toFixed(2), false);
+    drawRow('Social Security (Employee 7.5%)', `- ${employeeSs.toFixed(2)}`, false, '#dc2626');
+    drawRow('Social Security (Employer 14.25%)', employerSs.toFixed(2), false, '#6b7280');
+    doc.moveTo(tableX, rowY - 5).lineTo(tableX + 470, rowY - 5).stroke('#e2e8f0');
+    if (lateAmount > 0) drawRow('Late Deduction', `- ${lateAmount.toFixed(2)}`, false, '#dc2626');
+    if (absenceAmount > 0) drawRow('Absence Deduction', `- ${absenceAmount.toFixed(2)}`, false, '#dc2626');
+    if (manualDeductions > 0) drawRow('Manual Deductions', `- ${manualDeductions.toFixed(2)}`, false, '#dc2626');
+    if (overtimeAmount > 0) drawRow('Overtime Bonus', `+ ${overtimeAmount.toFixed(2)}`, false, '#059669');
+    doc.moveTo(tableX, rowY - 3).lineTo(tableX + 470, rowY - 3).stroke('#334155');
+    doc.moveTo(tableX, rowY - 1).lineTo(tableX + 470, rowY - 1).stroke('#334155');
+    rowY += 4;
+
+    doc.rect(tableX - 5, rowY - 3, 480, rowH + 6).fill('#f0fdf4');
+    doc.fillColor('#059669');
+    doc.font('Helvetica-Bold').fontSize(13);
+    doc.text('Net Salary', tableX, rowY + 2);
+    doc.text(`${netSalary.toFixed(2)} JOD`, valX - 20, rowY + 2, { align: 'right', width: 120 });
+    doc.fillColor('#000000');
+
+    doc.fontSize(8).font('Helvetica').fillColor('#94a3b8');
+    doc.text(`Generated by MED LOOP HR System — ${new Date().toISOString().slice(0, 10)}`, 50, 770, { align: 'center' });
+    doc.end();
+  } catch (err) {
+    console.error("GET /hr/payslips/:id/pdf error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Global auth for all other routes
 router.use(auth);
 
 // ============================================================
