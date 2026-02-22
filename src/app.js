@@ -12,6 +12,7 @@ import invoicesRouter from "./routes/invoices.js";
 import devicesRouter from "./routes/devices.js";
 import deviceResultsRouter from "./routes/device-results.js";
 import hrRouter from "./routes/hr.js";
+import catalogRouter from "./routes/catalog.js";
 
 dotenv.config();
 
@@ -57,6 +58,7 @@ app.use("/invoices", invoicesRouter);
 app.use("/devices", devicesRouter);
 app.use("/device-results", deviceResultsRouter);
 app.use("/hr", hrRouter);
+app.use("/catalog", catalogRouter);
 
 app.get("/", (_, res) => res.send("MedLoop API running"));
 
