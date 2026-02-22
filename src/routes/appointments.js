@@ -224,8 +224,11 @@ router.post("/", async (req, res) => {
     if (err.code === "23505" || (err.message && err.message.includes("overlap"))) {
       return res.status(409).json({ error: "Doctor already booked at this time" });
     }
+    if (err.code === "23503") {
+      return res.status(400).json({ error: `Foreign key error: ${err.detail || err.message}` });
+    }
     console.error("POST /appointments error:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: err.message || "Server error" });
   }
 });
 
