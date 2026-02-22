@@ -51,14 +51,15 @@ router.get("/payslips/:id/pdf", async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename="payslip-${id}-${monthLabel.replace(/\s/g, '-')}.pdf"`);
     doc.pipe(res);
 
-    const basicSalary = parseFloat(p.basic_salary);
-    const employeeSs = parseFloat(p.employee_ss);
-    const employerSs = parseFloat(p.employer_ss);
-    const lateAmount = parseFloat(p.final_late_amount);
-    const absenceAmount = parseFloat(p.final_absence_amount);
-    const overtimeAmount = parseFloat(p.final_overtime_amount) * parseFloat(p.overtime_multiplier);
-    const manualDeductions = parseFloat(p.manual_deductions_total);
-    const netSalary = parseFloat(p.net_salary);
+    const num = (v) => parseFloat(v) || 0;
+    const basicSalary = num(p.basic_salary);
+    const employeeSs = num(p.employee_ss);
+    const employerSs = num(p.employer_ss);
+    const lateAmount = num(p.final_late_amount);
+    const absenceAmount = num(p.final_absence_amount);
+    const overtimeAmount = num(p.final_overtime_amount) * num(p.overtime_multiplier);
+    const manualDeductions = num(p.manual_deductions_total);
+    const netSalary = num(p.net_salary);
 
     // Header
     doc.fontSize(20).font('Helvetica-Bold').text(clientName.toUpperCase(), { align: 'center' });
@@ -141,7 +142,7 @@ router.get("/payslips/:id/pdf", async (req, res) => {
     doc.end();
   } catch (err) {
     console.error("GET /hr/payslips/:id/pdf error:", err);
-    if (!res.headersSent) res.status(500).json({ error: "Server error" });
+    if (!res.headersSent) res.status(500).json({ error: "Server error", detail: err.message });
   }
 });
 
