@@ -189,6 +189,8 @@ router.get("/employees", async (req, res) => {
         phone: r.phone,
         email: r.email,
         status: r.status,
+        basicSalary: parseFloat(r.basic_salary) || 0,
+        role: r.role || 'HR_EMPLOYEE',
         bioRegistered: Number(r.bio_count) > 0,
         schedule: r.work_days
           ? {
@@ -225,6 +227,8 @@ router.post("/employees", async (req, res) => {
       end_time,
       grace_minutes,
       overtime_enabled,
+      basic_salary,
+      role,
     } = req.body;
 
     if (!full_name || !username || !password) {
@@ -247,9 +251,9 @@ router.post("/employees", async (req, res) => {
     const hash = await bcrypt.hash(password, 10);
 
     const { rows } = await pool.query(
-      `INSERT INTO hr_employees (client_id, full_name, username, password, phone, email)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [client_id, full_name, username, hash, phone || null, email || null]
+      `INSERT INTO hr_employees (client_id, full_name, username, password, phone, email, basic_salary, role)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [client_id, full_name, username, hash, phone || null, email || null, basic_salary || 0, role || 'HR_EMPLOYEE']
     );
 
     const empId = rows[0].id;
@@ -283,7 +287,7 @@ router.put("/employees/:id", async (req, res) => {
   try {
     const { client_id } = req.user;
     const { id } = req.params;
-    const { full_name, phone, email, status, work_days, start_time, end_time, grace_minutes, overtime_enabled } =
+    const { full_name, phone, email, status, work_days, start_time, end_time, grace_minutes, overtime_enabled, basic_salary, role } =
       req.body;
 
     // Update employee row
@@ -293,9 +297,11 @@ router.put("/employees/:id", async (req, res) => {
          phone=COALESCE($2, phone),
          email=COALESCE($3, email),
          status=COALESCE($4, status),
+         basic_salary=COALESCE($5, basic_salary),
+         role=COALESCE($6, role),
          updated_at=NOW()
-       WHERE id=$5 AND client_id=$6 RETURNING *`,
-      [full_name, phone, email, status, id, client_id]
+       WHERE id=$7 AND client_id=$8 RETURNING *`,
+      [full_name, phone, email, status, basic_salary, role, id, client_id]
     );
     if (!rows.length) return res.status(404).json({ error: "Employee not found" });
 
@@ -416,7 +422,7 @@ router.get("/me", async (req, res) => {
       [hr_employee_id, client_id]
     );
 
-    res.json({
+    const result = {
       id: e.id,
       fullName: e.full_name,
       username: e.username,
@@ -435,17 +441,39 @@ router.get("/me", async (req, res) => {
             overtimeEnabled: sched.rows[0].overtime_enabled,
           }
         : null,
-      todayAttendance: today.rows[0]
-        ? {
-            checkIn: today.rows[0].check_in,
-            checkOut: today.rows[0].check_out,
-            totalMinutes: today.rows[0].total_minutes,
-            lateMinutes: today.rows[0].late_minutes,
-            overtimeMinutes: today.rows[0].overtime_minutes,
-            status: today.rows[0].status,
-          }
-        : null,
-    });
+      role: e.role || 'HR_EMPLOYEE',
+      basicSalary: parseFloat(e.basic_salary) || 0,
+    };
+
+    // Check if currently on break
+    let onBreak = false;
+    if (today.rows[0] && today.rows[0].check_in && !today.rows[0].check_out) {
+      const lastEvt = await pool.query(
+        `SELECT event_type FROM hr_attendance_events
+         WHERE employee_id=$1 AND client_id=$2 AND work_date=CURRENT_DATE
+         ORDER BY event_time DESC LIMIT 1`,
+        [hr_employee_id, client_id]
+      );
+      if (lastEvt.rows.length && lastEvt.rows[0].event_type === 'break_out') {
+        onBreak = true;
+      }
+    }
+
+    result.todayAttendance = today.rows[0]
+      ? {
+          checkIn: today.rows[0].check_in,
+          checkOut: today.rows[0].check_out,
+          totalMinutes: today.rows[0].total_minutes,
+          lateMinutes: today.rows[0].late_minutes,
+          overtimeMinutes: today.rows[0].overtime_minutes,
+          totalBreakMinutes: today.rows[0].total_break_minutes || 0,
+          netWorkMinutes: today.rows[0].net_work_minutes || 0,
+          onBreak,
+          status: today.rows[0].status,
+        }
+      : null;
+
+    res.json(result);
   } catch (err) {
     console.error("GET /hr/me error:", err);
     res.status(500).json({ error: "Server error" });
@@ -1062,6 +1090,8 @@ router.get("/attendance", async (req, res) => {
         lateMinutes: r.late_minutes,
         earlyLeaveMinutes: r.early_leave_minutes,
         overtimeMinutes: r.overtime_minutes,
+        totalBreakMinutes: r.total_break_minutes || 0,
+        netWorkMinutes: r.net_work_minutes || r.total_minutes || 0,
         status: r.status,
       }))
     );
@@ -1184,6 +1214,860 @@ router.get("/reports/my-monthly", async (req, res) => {
     res.json({ month, employeeId: hr_employee_id, summary, days });
   } catch (err) {
     console.error("GET /hr/reports/my-monthly error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
+//  9. BREAK OUT / BREAK IN  (hr_employee)
+// ============================================================
+
+/** POST /hr/attendance/break-out */
+router.post("/attendance/break-out", async (req, res) => {
+  if (!requireHrEmployee(req, res)) return;
+  try {
+    const { hr_employee_id, client_id } = req.user;
+    const { latitude, longitude, device_info, bioToken } = req.body;
+
+    if (latitude == null || longitude == null) {
+      return res.status(400).json({ error: "GPS_REQUIRED", message: "Location is required" });
+    }
+
+    // Geo-fence
+    const geo = await validateGeoFence(client_id, latitude, longitude);
+    if (!geo.ok) {
+      return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
+    }
+
+    // Bio token
+    if (!bioToken) {
+      return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
+    }
+    const tokenCheck = await pool.query(
+      `DELETE FROM hr_webauthn_challenges
+       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
+       RETURNING id`,
+      [hr_employee_id, bioToken]
+    );
+    if (!tokenCheck.rows.length) {
+      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid." });
+    }
+
+    // Must be checked in today, not already on break, not checked out
+    const att = await pool.query(
+      `SELECT * FROM hr_attendance WHERE employee_id=$1 AND client_id=$2 AND work_date=CURRENT_DATE`,
+      [hr_employee_id, client_id]
+    );
+    if (!att.rows.length || !att.rows[0].check_in) {
+      return res.status(400).json({ error: "NOT_CHECKED_IN", message: "Must check in first" });
+    }
+    if (att.rows[0].check_out) {
+      return res.status(409).json({ error: "ALREADY_CHECKED_OUT", message: "Already checked out" });
+    }
+
+    // Check if already on break (last event is break_out without break_in)
+    const lastEvent = await pool.query(
+      `SELECT event_type FROM hr_attendance_events
+       WHERE employee_id=$1 AND client_id=$2 AND work_date=CURRENT_DATE
+       ORDER BY event_time DESC LIMIT 1`,
+      [hr_employee_id, client_id]
+    );
+    if (lastEvent.rows.length && lastEvent.rows[0].event_type === 'break_out') {
+      return res.status(409).json({ error: "ALREADY_ON_BREAK", message: "Already on break" });
+    }
+
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+
+    await pool.query(
+      `INSERT INTO hr_attendance_events (client_id, employee_id, work_date, event_type, event_time, latitude, longitude, device_info)
+       VALUES ($1,$2,$3,'break_out',$4,$5,$6,$7)`,
+      [client_id, hr_employee_id, todayStr, now, latitude, longitude, device_info ? JSON.stringify(device_info) : null]
+    );
+
+    res.json({ message: "Break started", time: now.toISOString() });
+  } catch (err) {
+    console.error("POST /hr/attendance/break-out error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /hr/attendance/break-in */
+router.post("/attendance/break-in", async (req, res) => {
+  if (!requireHrEmployee(req, res)) return;
+  try {
+    const { hr_employee_id, client_id } = req.user;
+    const { latitude, longitude, device_info, bioToken } = req.body;
+
+    if (latitude == null || longitude == null) {
+      return res.status(400).json({ error: "GPS_REQUIRED", message: "Location is required" });
+    }
+
+    const geo = await validateGeoFence(client_id, latitude, longitude);
+    if (!geo.ok) {
+      return res.status(400).json({ error: geo.error, message: geo.message, distance: geo.distance });
+    }
+
+    if (!bioToken) {
+      return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
+    }
+    const tokenCheck = await pool.query(
+      `DELETE FROM hr_webauthn_challenges
+       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
+       RETURNING id`,
+      [hr_employee_id, bioToken]
+    );
+    if (!tokenCheck.rows.length) {
+      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid." });
+    }
+
+    // Must be on break (last event is break_out)
+    const lastEvent = await pool.query(
+      `SELECT event_type, event_time FROM hr_attendance_events
+       WHERE employee_id=$1 AND client_id=$2 AND work_date=CURRENT_DATE
+       ORDER BY event_time DESC LIMIT 1`,
+      [hr_employee_id, client_id]
+    );
+    if (!lastEvent.rows.length || lastEvent.rows[0].event_type !== 'break_out') {
+      return res.status(400).json({ error: "NOT_ON_BREAK", message: "Not currently on break" });
+    }
+
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+
+    // Calculate this break duration
+    const breakStartTime = new Date(lastEvent.rows[0].event_time);
+    const breakMinutes = Math.round((now - breakStartTime) / 60000);
+
+    await pool.query(
+      `INSERT INTO hr_attendance_events (client_id, employee_id, work_date, event_type, event_time, latitude, longitude, device_info)
+       VALUES ($1,$2,$3,'break_in',$4,$5,$6,$7)`,
+      [client_id, hr_employee_id, todayStr, now, latitude, longitude, device_info ? JSON.stringify(device_info) : null]
+    );
+
+    // Update total_break_minutes on hr_attendance
+    await pool.query(
+      `UPDATE hr_attendance SET total_break_minutes = COALESCE(total_break_minutes,0) + $1,
+       net_work_minutes = COALESCE(total_minutes,0) - (COALESCE(total_break_minutes,0) + $1),
+       updated_at=NOW()
+       WHERE employee_id=$2 AND client_id=$3 AND work_date=CURRENT_DATE`,
+      [breakMinutes, hr_employee_id, client_id]
+    );
+
+    res.json({ message: "Break ended", time: now.toISOString(), breakMinutes });
+  } catch (err) {
+    console.error("POST /hr/attendance/break-in error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** GET /hr/attendance/:employeeId/timeline?date=YYYY-MM-DD */
+router.get("/attendance/:employeeId/timeline", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { employeeId } = req.params;
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: "date query param required" });
+
+    const { rows } = await pool.query(
+      `SELECT id, event_type, event_time, latitude, longitude, device_info
+       FROM hr_attendance_events
+       WHERE client_id=$1 AND employee_id=$2 AND work_date=$3
+       ORDER BY event_time ASC`,
+      [client_id, employeeId, date]
+    );
+
+    res.json(rows.map(r => ({
+      id: r.id,
+      eventType: r.event_type,
+      timestamp: r.event_time,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      deviceInfo: r.device_info,
+    })));
+  } catch (err) {
+    console.error("GET /hr/attendance/:id/timeline error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
+//  10. DEDUCTIONS  (admin)
+// ============================================================
+
+/** GET /hr/deductions?month=YYYY-MM&employee_id= */
+router.get("/deductions", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { month, employee_id } = req.query;
+
+    let query = `SELECT d.*, e.full_name AS employee_name
+                 FROM hr_deductions d
+                 JOIN hr_employees e ON e.id = d.employee_id
+                 WHERE d.client_id=$1`;
+    const params = [client_id];
+    let idx = 2;
+
+    if (month) { query += ` AND d.month = $${idx}::date`; params.push(month + '-01'); idx++; }
+    if (employee_id) { query += ` AND d.employee_id = $${idx}`; params.push(employee_id); idx++; }
+
+    query += " ORDER BY d.created_at DESC";
+
+    const { rows } = await pool.query(query, params);
+    res.json(rows.map(r => ({
+      id: r.id,
+      employeeId: r.employee_id,
+      employeeName: r.employee_name,
+      month: r.month,
+      amount: parseFloat(r.amount),
+      reason: r.reason,
+      createdAt: r.created_at,
+    })));
+  } catch (err) {
+    console.error("GET /hr/deductions error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /hr/deductions */
+router.post("/deductions", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id, id: userId } = req.user;
+    const { employee_id, month, amount, reason } = req.body;
+
+    if (!employee_id || !month || !amount) {
+      return res.status(400).json({ error: "employee_id, month, amount required" });
+    }
+
+    const monthDate = month.length === 7 ? month + '-01' : month;
+
+    const { rows } = await pool.query(
+      `INSERT INTO hr_deductions (client_id, employee_id, month, amount, reason, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [client_id, employee_id, monthDate, amount, reason || null, userId || null]
+    );
+
+    res.status(201).json({
+      id: rows[0].id,
+      employeeId: rows[0].employee_id,
+      month: rows[0].month,
+      amount: parseFloat(rows[0].amount),
+      reason: rows[0].reason,
+      createdAt: rows[0].created_at,
+    });
+  } catch (err) {
+    console.error("POST /hr/deductions error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** DELETE /hr/deductions/:id */
+router.delete("/deductions/:id", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { id } = req.params;
+    const { rows } = await pool.query(
+      `DELETE FROM hr_deductions WHERE id=$1 AND client_id=$2 RETURNING id`,
+      [id, client_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Not found" });
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error("DELETE /hr/deductions/:id error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
+//  11. WARNINGS  (admin)
+// ============================================================
+
+/** GET /hr/warnings?employee_id= */
+router.get("/warnings", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { employee_id } = req.query;
+
+    let query = `SELECT w.*, e.full_name AS employee_name
+                 FROM hr_warnings w
+                 JOIN hr_employees e ON e.id = w.employee_id
+                 WHERE w.client_id=$1`;
+    const params = [client_id];
+    let idx = 2;
+
+    if (employee_id) { query += ` AND w.employee_id = $${idx}`; params.push(employee_id); idx++; }
+
+    query += " ORDER BY w.issued_at DESC";
+
+    const { rows } = await pool.query(query, params);
+    res.json(rows.map(r => ({
+      id: r.id,
+      employeeId: r.employee_id,
+      employeeName: r.employee_name,
+      level: r.level,
+      reason: r.reason,
+      issuedAt: r.issued_at,
+    })));
+  } catch (err) {
+    console.error("GET /hr/warnings error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /hr/warnings */
+router.post("/warnings", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id, id: userId } = req.user;
+    const { employee_id, level, reason } = req.body;
+
+    if (!employee_id || !level) {
+      return res.status(400).json({ error: "employee_id, level required" });
+    }
+    if (!['verbal', 'written', 'final'].includes(level)) {
+      return res.status(400).json({ error: "level must be verbal, written, or final" });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO hr_warnings (client_id, employee_id, level, reason, issued_by)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [client_id, employee_id, level, reason || null, userId || null]
+    );
+
+    res.status(201).json({
+      id: rows[0].id,
+      employeeId: rows[0].employee_id,
+      level: rows[0].level,
+      reason: rows[0].reason,
+      issuedAt: rows[0].issued_at,
+    });
+  } catch (err) {
+    console.error("POST /hr/warnings error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
+//  12. NOTIFICATIONS  (admin sends, employee reads)
+// ============================================================
+
+/** GET /hr/notifications?employee_id= (admin) */
+router.get("/notifications", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { employee_id } = req.query;
+
+    let query = `SELECT n.*, e.full_name AS employee_name
+                 FROM hr_notifications n
+                 JOIN hr_employees e ON e.id = n.employee_id
+                 WHERE n.client_id=$1`;
+    const params = [client_id];
+    let idx = 2;
+
+    if (employee_id) { query += ` AND n.employee_id = $${idx}`; params.push(employee_id); idx++; }
+
+    query += " ORDER BY n.created_at DESC";
+
+    const { rows } = await pool.query(query, params);
+    res.json(rows.map(r => ({
+      id: r.id,
+      employeeId: r.employee_id,
+      employeeName: r.employee_name,
+      message: r.message,
+      isRead: r.is_read,
+      createdAt: r.created_at,
+    })));
+  } catch (err) {
+    console.error("GET /hr/notifications error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /hr/notifications */
+router.post("/notifications", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id, id: userId } = req.user;
+    const { employee_id, message } = req.body;
+
+    if (!employee_id || !message) {
+      return res.status(400).json({ error: "employee_id, message required" });
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO hr_notifications (client_id, employee_id, message, created_by)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [client_id, employee_id, message, userId || null]
+    );
+
+    res.status(201).json({
+      id: rows[0].id,
+      employeeId: rows[0].employee_id,
+      message: rows[0].message,
+      isRead: rows[0].is_read,
+      createdAt: rows[0].created_at,
+    });
+  } catch (err) {
+    console.error("POST /hr/notifications error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** GET /hr/notifications/my — employee's own notifications */
+router.get("/notifications/my", async (req, res) => {
+  if (!requireHrEmployee(req, res)) return;
+  try {
+    const { hr_employee_id, client_id } = req.user;
+    const { rows } = await pool.query(
+      `SELECT * FROM hr_notifications WHERE client_id=$1 AND employee_id=$2 ORDER BY created_at DESC`,
+      [client_id, hr_employee_id]
+    );
+    res.json(rows.map(r => ({
+      id: r.id,
+      message: r.message,
+      isRead: r.is_read,
+      createdAt: r.created_at,
+    })));
+  } catch (err) {
+    console.error("GET /hr/notifications/my error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** PATCH /hr/notifications/:id/read */
+router.patch("/notifications/:id/read", async (req, res) => {
+  if (!requireHrEmployee(req, res)) return;
+  try {
+    const { hr_employee_id, client_id } = req.user;
+    const { id } = req.params;
+    const { rows } = await pool.query(
+      `UPDATE hr_notifications SET is_read=true WHERE id=$1 AND client_id=$2 AND employee_id=$3 RETURNING id`,
+      [id, client_id, hr_employee_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Not found" });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PATCH /hr/notifications/:id/read error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
+//  13. SOCIAL SECURITY SETTINGS  (admin)
+// ============================================================
+
+/** GET /hr/social-security */
+router.get("/social-security", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { rows } = await pool.query(
+      `SELECT * FROM hr_social_security_settings WHERE client_id=$1`,
+      [client_id]
+    );
+    if (!rows.length) {
+      // Return defaults
+      return res.json({ employeeRate: 7.50, employerRate: 14.25, enabled: true });
+    }
+    res.json({
+      employeeRate: parseFloat(rows[0].employee_rate_percent),
+      employerRate: parseFloat(rows[0].employer_rate_percent),
+      enabled: rows[0].enabled,
+    });
+  } catch (err) {
+    console.error("GET /hr/social-security error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** PATCH /hr/social-security */
+router.patch("/social-security", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { employeeRate, employerRate, enabled } = req.body;
+
+    await pool.query(
+      `INSERT INTO hr_social_security_settings (client_id, employee_rate_percent, employer_rate_percent, enabled)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (client_id)
+       DO UPDATE SET employee_rate_percent=EXCLUDED.employee_rate_percent,
+                     employer_rate_percent=EXCLUDED.employer_rate_percent,
+                     enabled=EXCLUDED.enabled,
+                     updated_at=NOW()`,
+      [client_id, employeeRate ?? 7.50, employerRate ?? 14.25, enabled !== false]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PATCH /hr/social-security error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ============================================================
+//  14. PAYROLL  (admin)
+// ============================================================
+
+/** POST /hr/payroll/generate — generate or recalculate draft payroll for a month */
+router.post("/payroll/generate", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id, id: userId } = req.user;
+    const { month } = req.body; // "YYYY-MM"
+    if (!month) return res.status(400).json({ error: "month (YYYY-MM) required" });
+
+    const monthDate = month + '-01';
+    const [y, m] = month.split("-").map(Number);
+    const endDate = new Date(y, m, 0).toISOString().slice(0, 10);
+    const daysInMonth = new Date(y, m, 0).getDate();
+
+    // Get or create payroll run
+    let run = await pool.query(
+      `SELECT * FROM hr_payroll_runs WHERE client_id=$1 AND month=$2`,
+      [client_id, monthDate]
+    );
+    if (run.rows.length && run.rows[0].status === 'closed') {
+      return res.status(409).json({ error: "Month already closed" });
+    }
+
+    let runId;
+    if (!run.rows.length) {
+      const ins = await pool.query(
+        `INSERT INTO hr_payroll_runs (client_id, month, status, created_by) VALUES ($1,$2,'draft',$3) RETURNING id`,
+        [client_id, monthDate, userId || null]
+      );
+      runId = ins.rows[0].id;
+    } else {
+      runId = run.rows[0].id;
+      // Reset existing payslips to draft for recalculation
+      await pool.query(
+        `DELETE FROM hr_payslips WHERE payroll_run_id=$1`,
+        [runId]
+      );
+    }
+
+    // Get social security settings
+    const ssResult = await pool.query(
+      `SELECT * FROM hr_social_security_settings WHERE client_id=$1`,
+      [client_id]
+    );
+    const ssEmployeeRate = ssResult.rows.length ? parseFloat(ssResult.rows[0].employee_rate_percent) / 100 : 0.075;
+    const ssEmployerRate = ssResult.rows.length ? parseFloat(ssResult.rows[0].employer_rate_percent) / 100 : 0.1425;
+    const ssEnabled = ssResult.rows.length ? ssResult.rows[0].enabled : true;
+
+    // Get all active employees
+    const employees = await pool.query(
+      `SELECT id, full_name, basic_salary FROM hr_employees WHERE client_id=$1 AND status='active'`,
+      [client_id]
+    );
+
+    const payslips = [];
+
+    for (const emp of employees.rows) {
+      const basicSalary = parseFloat(emp.basic_salary) || 0;
+      const dailyRate = daysInMonth > 0 ? basicSalary / daysInMonth : 0;
+      const hourlyRate = dailyRate / 8;
+
+      // Get attendance for month
+      const attendance = await pool.query(
+        `SELECT * FROM hr_attendance
+         WHERE client_id=$1 AND employee_id=$2 AND work_date BETWEEN $3 AND $4`,
+        [client_id, emp.id, monthDate, endDate]
+      );
+
+      let daysWorked = 0, totalWorkMinutes = 0, totalLateMinutes = 0;
+      let totalOvertimeMinutes = 0, totalBreakMins = 0, absentDays = 0;
+
+      // Count expected work days from schedules
+      for (const att of attendance.rows) {
+        if (att.check_in) daysWorked++;
+        totalWorkMinutes += att.total_minutes || 0;
+        totalLateMinutes += att.late_minutes || 0;
+        totalOvertimeMinutes += att.overtime_minutes || 0;
+        totalBreakMins += att.total_break_minutes || 0;
+        if (!att.check_in && att.status !== 'weekend') absentDays++;
+      }
+
+      // Calculate deduction amounts
+      const lateAmount = totalLateMinutes > 0 ? Math.round(totalLateMinutes * (hourlyRate / 60) * 100) / 100 : 0;
+      const overtimeAmount = totalOvertimeMinutes > 0 ? Math.round(totalOvertimeMinutes * (hourlyRate / 60) * 100) / 100 : 0;
+      const absenceAmount = absentDays > 0 ? Math.round(absentDays * dailyRate * 100) / 100 : 0;
+      const lateThreshold = totalLateMinutes > 180; // > 3 hours total late
+
+      // Social security from basic salary only
+      const employeeSS = ssEnabled ? Math.round(basicSalary * ssEmployeeRate * 100) / 100 : 0;
+      const employerSS = ssEnabled ? Math.round(basicSalary * ssEmployerRate * 100) / 100 : 0;
+
+      // Manual deductions
+      const deductions = await pool.query(
+        `SELECT COALESCE(SUM(amount),0) AS total FROM hr_deductions WHERE client_id=$1 AND employee_id=$2 AND month=$3`,
+        [client_id, emp.id, monthDate]
+      );
+      const manualDeductionsTotal = parseFloat(deductions.rows[0].total) || 0;
+
+      // Net salary = basic - SS - late - absence - manual_deductions + overtime
+      const netSalary = Math.round((basicSalary - employeeSS - lateAmount - absenceAmount - manualDeductionsTotal + overtimeAmount) * 100) / 100;
+
+      await pool.query(
+        `INSERT INTO hr_payslips (
+          client_id, payroll_run_id, employee_id, month,
+          basic_salary, employee_ss, employer_ss,
+          suggested_late_minutes, suggested_late_amount, final_late_amount, late_threshold_exceeded,
+          suggested_overtime_minutes, overtime_multiplier, suggested_overtime_amount, final_overtime_amount,
+          suggested_absent_days, suggested_absence_amount, final_absence_amount,
+          total_break_minutes, manual_deductions_total, net_salary,
+          days_worked, total_work_minutes, status
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'draft')`,
+        [
+          client_id, runId, emp.id, monthDate,
+          basicSalary, employeeSS, employerSS,
+          totalLateMinutes, lateAmount, lateAmount, lateThreshold,
+          totalOvertimeMinutes, 1.00, overtimeAmount, overtimeAmount,
+          absentDays, absenceAmount, absenceAmount,
+          totalBreakMins, manualDeductionsTotal, netSalary,
+          daysWorked, totalWorkMinutes,
+        ]
+      );
+
+      payslips.push({ employeeId: emp.id, employeeName: emp.full_name, netSalary });
+    }
+
+    res.json({ runId, month, status: 'draft', totalEmployees: payslips.length, payslips });
+  } catch (err) {
+    console.error("POST /hr/payroll/generate error:", err);
+    res.status(500).json({ error: "Server error: " + (err?.message || String(err)) });
+  }
+});
+
+/** GET /hr/payroll/run?month=YYYY-MM */
+router.get("/payroll/run", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { month } = req.query;
+    if (!month) return res.status(400).json({ error: "month required" });
+
+    const monthDate = month + '-01';
+
+    const run = await pool.query(
+      `SELECT * FROM hr_payroll_runs WHERE client_id=$1 AND month=$2`,
+      [client_id, monthDate]
+    );
+    if (!run.rows.length) return res.json(null);
+
+    const payslips = await pool.query(
+      `SELECT p.*, e.full_name AS employee_name
+       FROM hr_payslips p
+       JOIN hr_employees e ON e.id = p.employee_id
+       WHERE p.payroll_run_id=$1 ORDER BY e.full_name`,
+      [run.rows[0].id]
+    );
+
+    res.json({
+      id: run.rows[0].id,
+      month: run.rows[0].month,
+      status: run.rows[0].status,
+      createdAt: run.rows[0].created_at,
+      payslips: payslips.rows.map(p => ({
+        id: p.id,
+        employeeId: p.employee_id,
+        employeeName: p.employee_name,
+        basicSalary: parseFloat(p.basic_salary),
+        employeeSs: parseFloat(p.employee_ss),
+        employerSs: parseFloat(p.employer_ss),
+        suggestedLateMinutes: p.suggested_late_minutes,
+        suggestedLateAmount: parseFloat(p.suggested_late_amount),
+        finalLateAmount: parseFloat(p.final_late_amount),
+        lateThresholdExceeded: p.late_threshold_exceeded,
+        suggestedOvertimeMinutes: p.suggested_overtime_minutes,
+        overtimeMultiplier: parseFloat(p.overtime_multiplier),
+        suggestedOvertimeAmount: parseFloat(p.suggested_overtime_amount),
+        finalOvertimeAmount: parseFloat(p.final_overtime_amount),
+        suggestedAbsentDays: p.suggested_absent_days,
+        suggestedAbsenceAmount: parseFloat(p.suggested_absence_amount),
+        finalAbsenceAmount: parseFloat(p.final_absence_amount),
+        totalBreakMinutes: p.total_break_minutes,
+        manualDeductionsTotal: parseFloat(p.manual_deductions_total),
+        netSalary: parseFloat(p.net_salary),
+        daysWorked: p.days_worked,
+        totalWorkMinutes: p.total_work_minutes,
+        status: p.status,
+        rejectReason: p.reject_reason,
+        pdfUrl: p.pdf_url,
+      })),
+    });
+  } catch (err) {
+    console.error("GET /hr/payroll/run error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** GET /hr/payslips/:id */
+router.get("/payslips/:id", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { id } = req.params;
+    const { rows } = await pool.query(
+      `SELECT p.*, e.full_name AS employee_name
+       FROM hr_payslips p
+       JOIN hr_employees e ON e.id = p.employee_id
+       WHERE p.id=$1 AND p.client_id=$2`,
+      [id, client_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Payslip not found" });
+    const p = rows[0];
+    res.json({
+      id: p.id,
+      employeeId: p.employee_id,
+      employeeName: p.employee_name,
+      basicSalary: parseFloat(p.basic_salary),
+      employeeSs: parseFloat(p.employee_ss),
+      employerSs: parseFloat(p.employer_ss),
+      suggestedLateMinutes: p.suggested_late_minutes,
+      suggestedLateAmount: parseFloat(p.suggested_late_amount),
+      finalLateAmount: parseFloat(p.final_late_amount),
+      lateThresholdExceeded: p.late_threshold_exceeded,
+      suggestedOvertimeMinutes: p.suggested_overtime_minutes,
+      overtimeMultiplier: parseFloat(p.overtime_multiplier),
+      suggestedOvertimeAmount: parseFloat(p.suggested_overtime_amount),
+      finalOvertimeAmount: parseFloat(p.final_overtime_amount),
+      suggestedAbsentDays: p.suggested_absent_days,
+      suggestedAbsenceAmount: parseFloat(p.suggested_absence_amount),
+      finalAbsenceAmount: parseFloat(p.final_absence_amount),
+      totalBreakMinutes: p.total_break_minutes,
+      manualDeductionsTotal: parseFloat(p.manual_deductions_total),
+      netSalary: parseFloat(p.net_salary),
+      daysWorked: p.days_worked,
+      totalWorkMinutes: p.total_work_minutes,
+      status: p.status,
+      rejectReason: p.reject_reason,
+      pdfUrl: p.pdf_url,
+    });
+  } catch (err) {
+    console.error("GET /hr/payslips/:id error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** PATCH /hr/payslips/:id — update final amounts */
+router.patch("/payslips/:id", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { id } = req.params;
+    const { final_late_amount, final_overtime_amount, final_absence_amount, overtime_multiplier } = req.body;
+
+    // Get current payslip
+    const current = await pool.query(
+      `SELECT * FROM hr_payslips WHERE id=$1 AND client_id=$2`,
+      [id, client_id]
+    );
+    if (!current.rows.length) return res.status(404).json({ error: "Not found" });
+    if (current.rows[0].status !== 'draft') return res.status(400).json({ error: "Can only edit draft payslips" });
+
+    const p = current.rows[0];
+    const newLate = final_late_amount ?? parseFloat(p.final_late_amount);
+    const newOT = final_overtime_amount ?? parseFloat(p.final_overtime_amount);
+    const newAbsence = final_absence_amount ?? parseFloat(p.final_absence_amount);
+    const newMultiplier = overtime_multiplier ?? parseFloat(p.overtime_multiplier);
+    const adjustedOT = newOT * newMultiplier;
+
+    // Recalculate net salary
+    const basicSalary = parseFloat(p.basic_salary);
+    const employeeSS = parseFloat(p.employee_ss);
+    const manualDeductions = parseFloat(p.manual_deductions_total);
+    const netSalary = Math.round((basicSalary - employeeSS - newLate - newAbsence - manualDeductions + adjustedOT) * 100) / 100;
+
+    await pool.query(
+      `UPDATE hr_payslips SET
+         final_late_amount=$1, final_overtime_amount=$2, final_absence_amount=$3,
+         overtime_multiplier=$4, net_salary=$5, updated_at=NOW()
+       WHERE id=$6`,
+      [newLate, newOT, newAbsence, newMultiplier, netSalary, id]
+    );
+
+    res.json({ success: true, netSalary });
+  } catch (err) {
+    console.error("PATCH /hr/payslips/:id error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /hr/payslips/:id/approve */
+router.post("/payslips/:id/approve", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id, id: userId } = req.user;
+    const { id } = req.params;
+    const { rows } = await pool.query(
+      `UPDATE hr_payslips SET status='approved', approved_by=$1, approved_at=NOW(), updated_at=NOW()
+       WHERE id=$2 AND client_id=$3 AND status='draft' RETURNING id`,
+      [userId || null, id, client_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Not found or not draft" });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("POST /hr/payslips/:id/approve error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /hr/payslips/:id/reject */
+router.post("/payslips/:id/reject", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { id } = req.params;
+    const { reason } = req.body;
+    const { rows } = await pool.query(
+      `UPDATE hr_payslips SET status='rejected', reject_reason=$1, updated_at=NOW()
+       WHERE id=$2 AND client_id=$3 AND status='draft' RETURNING id`,
+      [reason || null, id, client_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Not found or not draft" });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("POST /hr/payslips/:id/reject error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /hr/payroll/close-month */
+router.post("/payroll/close-month", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const { client_id } = req.user;
+    const { month } = req.body;
+    if (!month) return res.status(400).json({ error: "month required" });
+
+    const monthDate = month + '-01';
+
+    // Check all payslips are approved or rejected
+    const pending = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM hr_payslips
+       WHERE client_id=$1 AND month=$2 AND status='draft'`,
+      [client_id, monthDate]
+    );
+    if (parseInt(pending.rows[0].cnt) > 0) {
+      return res.status(400).json({ error: "All payslips must be approved or rejected before closing" });
+    }
+
+    await pool.query(
+      `UPDATE hr_payroll_runs SET status='closed' WHERE client_id=$1 AND month=$2`,
+      [client_id, monthDate]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("POST /hr/payroll/close-month error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
