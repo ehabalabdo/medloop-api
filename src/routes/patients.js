@@ -147,7 +147,7 @@ router.get("/:id", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { role, client_id } = req.user;
-    if (!["admin", "receptionist", "doctor", "super_admin"].includes(role)) {
+    if (!["admin", "receptionist", "secretary", "doctor", "super_admin"].includes(role)) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
