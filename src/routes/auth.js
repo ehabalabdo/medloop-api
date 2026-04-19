@@ -5,8 +5,23 @@ import pool from "../db.js";
 import { decrypt, blindIndex } from "../utils/crypto.js";
 import { isLocked, recordFailedLogin, recordSuccessfulLogin, LOCKOUT_CONFIG } from "../utils/lockout.js";
 import logger from "../utils/logger.js";
+import { validateBody, z } from "../utils/zod-validate.js";
 
 const router = express.Router();
+
+// Shared schemas — bound payload sizes to defeat oversized-string DoS attempts.
+const LoginSchema = z.object({
+  username: z.string().trim().min(1).max(255),
+  password: z.string().min(1).max(500),
+  client_id: z.union([z.string().min(1).max(64), z.number().int().positive()]),
+});
+
+const SuperAdminLoginSchema = z.object({
+  username: z.string().trim().min(1).max(255),
+  password: z.string().min(1).max(500),
+});
+
+const HrLoginSchema = LoginSchema;
 
 /**
  * POST /auth/login
@@ -14,13 +29,9 @@ const router = express.Router();
  * Checks users table then patients table
  * Returns JWT with user info
  */
-router.post("/login", async (req, res) => {
+router.post("/login", validateBody(LoginSchema), async (req, res) => {
   try {
-    const { username, password, client_id } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({ error: "username and password required" });
-    }
+    const { username, password, client_id } = req.validBody;
 
     // SECURITY: client_id is mandatory to prevent cross-tenant account
     // enumeration / hijacking. Frontend must always resolve tenant via slug
@@ -182,13 +193,9 @@ router.post("/login", async (req, res) => {
  * super_admins.password_hash. Falls back to legacy plaintext "password"
  * column ONLY if the row has not been migrated yet (auto-upgrades on success).
  */
-router.post("/super-admin/login", async (req, res) => {
+router.post("/super-admin/login", validateBody(SuperAdminLoginSchema), async (req, res) => {
   try {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({ error: "username and password required" });
-    }
+    const { username, password } = req.validBody;
 
     // Detect whether the legacy plaintext "password" column still exists,
     // so this works on freshly migrated and not-yet-migrated databases.
@@ -287,12 +294,9 @@ router.post("/super-admin/login", async (req, res) => {
  * POST /auth/hr-login
  * HR Employee login (separate from staff login)
  */
-router.post("/hr-login", async (req, res) => {
+router.post("/hr-login", validateBody(HrLoginSchema), async (req, res) => {
   try {
-    const { username, password, client_id } = req.body;
-    if (!username || !password || !client_id) {
-      return res.status(400).json({ error: "username, password, client_id required" });
-    }
+    const { username, password, client_id } = req.validBody;
 
     const emailIdx = blindIndex(username);
     const result = await pool.query(

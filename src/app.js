@@ -19,6 +19,7 @@ import deviceResultsRouter from "./routes/device-results.js";
 import hrRouter from "./routes/hr.js";
 import catalogRouter from "./routes/catalog.js";
 import bridgeRouter from "./routes/bridge.js";
+import healthRouter from "./routes/health.js";
 import { auditLog } from "./middleware/auditLog.js";
 import { csrfGuard } from "./middleware/csrf.js";
 
@@ -111,6 +112,9 @@ app.use(globalLimiter);
 
 // Audit log middleware (best-effort, runs after routes set req.user)
 app.use(auditLog);
+
+// Health endpoints (no auth required) — used by Render and uptime monitors.
+app.use("/", healthRouter);
 
 // Public routes (no auth)
 app.use("/auth", authRoutes);

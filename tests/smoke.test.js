@@ -89,4 +89,37 @@ describe("API smoke", () => {
       .set("Content-Type", "application/json");
     expect([400, 401]).toContain(res.status);
   });
+
+  it("zod validation rejects oversized username on /auth/login", async () => {
+    const res = await request
+      .post("/auth/login")
+      .send({ username: "a".repeat(300), password: "x", client_id: "1" })
+      .set("Content-Type", "application/json");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request");
+    expect(Array.isArray(res.body.details)).toBe(true);
+  });
+
+  it("zod validation rejects missing client_id on /auth/login", async () => {
+    const res = await request
+      .post("/auth/login")
+      .send({ username: "x", password: "y" })
+      .set("Content-Type", "application/json");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request");
+  });
+
+  it("liveness /healthz returns ok with uptime", async () => {
+    const res = await request.get("/healthz");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ok");
+    expect(typeof res.body.uptime_s).toBe("number");
+  });
+
+  it("readiness /readyz pings DB and returns ready when up", async () => {
+    const res = await request.get("/readyz");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ready");
+    expect(typeof res.body.db_ms).toBe("number");
+  });
 });
