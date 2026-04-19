@@ -6,6 +6,14 @@ import { encrypt, decrypt } from "../utils/crypto.js";
 const router = express.Router();
 router.use(auth);
 
+const INVOICE_STATUSES = ["unpaid", "partial", "paid", "refunded", "cancelled"];
+const PAYMENT_METHODS = ["cash", "card", "bank_transfer", "insurance", "other"];
+
+function validAmount(n) {
+  const x = Number(n);
+  return Number.isFinite(x) && x >= 0 && x <= 1_000_000_000;
+}
+
 /** Map a DB row to frontend-compatible Invoice shape */
 function mapInvoiceRow(row) {
   return {
@@ -69,10 +77,25 @@ router.post("/", async (req, res) => {
     const invoiceId = id || `inv_${Date.now()}`;
     const vId = visitId || visit_id;
     const pId = patientId || patient_id;
-    const pName = patientName || patient_name || "";
+    const pName = String(patientName || patient_name || "").slice(0, 200);
     const total = totalAmount || total_amount || 0;
     const paid = paidAmount || paid_amount || 0;
     const method = paymentMethod || payment_method || "cash";
+
+    // Validate enums + amounts
+    if (!validAmount(total) || !validAmount(paid)) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+    if (!PAYMENT_METHODS.includes(method)) {
+      return res.status(400).json({ error: `payment_method must be one of: ${PAYMENT_METHODS.join(", ")}` });
+    }
+    const safeStatus = INVOICE_STATUSES.includes(status) ? status : "unpaid";
+
+    // Bound items array size
+    const itemsArr = Array.isArray(items) ? items : [];
+    if (Buffer.byteLength(JSON.stringify(itemsArr), "utf8") > 64 * 1024) {
+      return res.status(400).json({ error: "items too large (max 64KB)" });
+    }
 
     const { rows } = await pool.query(
       `INSERT INTO invoices (
@@ -83,8 +106,8 @@ router.post("/", async (req, res) => {
       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, NOW(), NOW(), 'system', 'system', false)
       RETURNING *`,
       [
-        invoiceId, vId, pId, encrypt(pName), JSON.stringify(items || []),
-        total, paid, method, status || "unpaid", client_id,
+        invoiceId, vId, pId, encrypt(pName), JSON.stringify(itemsArr),
+        total, paid, method, safeStatus, client_id,
       ]
     );
 
@@ -116,29 +139,41 @@ router.put("/:id", async (req, res) => {
     let idx = 1;
 
     if (items !== undefined) {
+      const itemsArr = Array.isArray(items) ? items : [];
+      if (Buffer.byteLength(JSON.stringify(itemsArr), "utf8") > 64 * 1024) {
+        return res.status(400).json({ error: "items too large (max 64KB)" });
+      }
       sets.push(`items=$${idx++}::jsonb`);
-      params.push(JSON.stringify(items));
+      params.push(JSON.stringify(itemsArr));
     }
 
     const total = totalAmount !== undefined ? totalAmount : total_amount;
     if (total !== undefined) {
+      if (!validAmount(total)) return res.status(400).json({ error: "Invalid total_amount" });
       sets.push(`total_amount=$${idx++}`);
       params.push(total);
     }
 
     const paid = paidAmount !== undefined ? paidAmount : paid_amount;
     if (paid !== undefined) {
+      if (!validAmount(paid)) return res.status(400).json({ error: "Invalid paid_amount" });
       sets.push(`paid_amount=$${idx++}`);
       params.push(paid);
     }
 
     const method = paymentMethod !== undefined ? paymentMethod : payment_method;
     if (method !== undefined) {
+      if (!PAYMENT_METHODS.includes(method)) {
+        return res.status(400).json({ error: `payment_method must be one of: ${PAYMENT_METHODS.join(", ")}` });
+      }
       sets.push(`payment_method=$${idx++}`);
       params.push(method);
     }
 
     if (status !== undefined) {
+      if (!INVOICE_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `status must be one of: ${INVOICE_STATUSES.join(", ")}` });
+      }
       sets.push(`status=$${idx++}`);
       params.push(status);
     }
