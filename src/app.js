@@ -15,6 +15,8 @@ import devicesRouter from "./routes/devices.js";
 import deviceResultsRouter from "./routes/device-results.js";
 import hrRouter from "./routes/hr.js";
 import catalogRouter from "./routes/catalog.js";
+import bridgeRouter from "./routes/bridge.js";
+import { auditLog } from "./middleware/auditLog.js";
 
 dotenv.config();
 
@@ -67,8 +69,14 @@ const authLimiter = rateLimit({
 });
 app.use("/auth/login", authLimiter);
 app.use("/auth/super-admin/login", authLimiter);
-app.use("/auth/hr-login", authLimiter);
+appAudit log middleware (best-effort, runs after routes set req.user)
+app.use(auditLog);
 
+// Public routes (no auth)
+app.use("/auth", authRoutes);
+
+// Bridge Agent routes (auth via X-Bridge-Key, NOT JWT)
+app.use("/bridge", bridgeRouter
 // Public routes (no auth)
 app.use("/auth", authRoutes);
 
