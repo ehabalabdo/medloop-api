@@ -494,6 +494,43 @@ router.post("/migrate-encryption", async (req, res) => {
   }
 });
 
+/**
+ * POST /auth/migrate-passwords
+ * Super-admin only. Bcrypt-hashes any remaining plaintext passwords in
+ * users / hr_employees / patients. Idempotent: rows already prefixed with
+ * `$2` (bcrypt hash) are skipped. Safe to re-run.
+ */
+router.post("/migrate-passwords", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Unauthorized" });
+    let decoded;
+    try { decoded = jwt.verify(token, process.env.JWT_SECRET); }
+    catch { return res.status(401).json({ error: "Invalid token" }); }
+    if (decoded.role !== "super_admin" && decoded.type !== "super_admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const stats = { users: 0, hr_employees: 0, patients: 0 };
+    for (const table of ["users", "hr_employees", "patients"]) {
+      const { rows } = await pool.query(
+        `SELECT id, password FROM ${table}
+         WHERE password IS NOT NULL AND password NOT LIKE '$2%'`
+      );
+      for (const r of rows) {
+        const hash = await bcrypt.hash(r.password, 12);
+        await pool.query(`UPDATE ${table} SET password=$1 WHERE id=$2`, [hash, r.id]);
+        stats[table]++;
+      }
+    }
+    return res.json({ ok: true, hashed: stats });
+  } catch (err) {
+    console.error("POST /auth/migrate-passwords error:", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
 router.post("/refresh", (req, res) => {
   const { token } = req.body;
   try {
