@@ -137,7 +137,8 @@ router.post("/device-results", async (req, res) => {
     const out = await insertResult(req.user.client_id, req.body || {});
     res.status(201).json(out);
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
+    console.error("POST /bridge/device-results error:", err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Server error" });
   }
 });
 

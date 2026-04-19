@@ -143,7 +143,7 @@ router.get("/payslips/:id/pdf", async (req, res) => {
     doc.end();
   } catch (err) {
     console.error("GET /hr/payslips/:id/pdf error:", err);
-    if (!res.headersSent) res.status(500).json({ error: "Server error", detail: err.message });
+    if (!res.headersSent) res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -972,7 +972,7 @@ router.post("/webauthn/authenticate/verify", async (req, res) => {
     } catch (verifyErr) {
       console.error("[WebAuthn Auth Verify] VERIFY THREW ERROR:", verifyErr.message);
       console.error("[WebAuthn Auth Verify] rpID:", rpID, "origin:", origin);
-      return res.status(400).json({ error: "Biometric verification failed: " + verifyErr.message });
+      return res.status(400).json({ error: "Biometric verification failed" });
     }
 
     console.log("[WebAuthn Auth Verify] verified:", verification.verified);

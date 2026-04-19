@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { createAppointmentSchema } from "../validation/appointment.js";
@@ -230,10 +230,10 @@ router.post("/", async (req, res) => {
       return res.status(409).json({ error: "Doctor already booked at this time" });
     }
     if (err.code === "23503") {
-      return res.status(400).json({ error: `Foreign key error: ${err.detail || err.message}` });
+      return res.status(400).json({ error: "Foreign key error" });
     }
     console.error("POST /appointments error:", err);
-    res.status(500).json({ error: err.message || "Server error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 

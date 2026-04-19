@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import pool from "../db.js";
@@ -234,7 +234,7 @@ router.post("/super-admin/login", async (req, res) => {
     if (admin.password_hash && admin.password_hash.startsWith("$2")) {
       valid = await bcrypt.compare(password, admin.password_hash);
     } else if (admin.password) {
-      // Legacy plaintext fallback — auto-upgrade to bcrypt on successful login.
+      // Legacy plaintext fallback â€” auto-upgrade to bcrypt on successful login.
       valid = password === admin.password;
       upgradeFromPlaintext = valid;
     }
@@ -490,7 +490,7 @@ router.post("/migrate-encryption", async (req, res) => {
     return res.json({ ok: true, migrated: stats });
   } catch (err) {
     console.error("POST /auth/migrate-encryption error:", err);
-    res.status(500).json({ error: err.message || "Server error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -527,7 +527,7 @@ router.post("/migrate-passwords", async (req, res) => {
     return res.json({ ok: true, hashed: stats });
   } catch (err) {
     console.error("POST /auth/migrate-passwords error:", err);
-    res.status(500).json({ error: err.message || "Server error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 

@@ -112,6 +112,20 @@ app.use("/catalog", catalogRouter);
 
 app.get("/", (_, res) => res.send("MedLoop API running"));
 
+// 404 handler — return JSON instead of Express HTML
+app.use((req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
+// Final error handler — never leak stack traces or err.message to clients.
+// Errors thrown by route handlers without explicit try/catch land here.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+  console.error("[unhandled]", req.method, req.originalUrl, err);
+  if (res.headersSent) return;
+  res.status(err.status || 500).json({ error: "Server error" });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
   console.log(`API running on port ${PORT}`)
