@@ -8,17 +8,22 @@ router.use(auth);
 // ضغط الأطباء (عدد المواعيد بالأسبوع)
 router.get("/doctor-load", async (req, res) => {
   const { from, to } = req.query;
-  const { clinic_id } = req.user;
+  const { client_id } = req.user;
+  if (!client_id) return res.status(403).json({ error: "no_tenant" });
+  const clinicId = req.query.clinic_id || null;
+
+  const params = clinicId ? [client_id, from, to, clinicId] : [client_id, from, to];
+  const clinicFilter = clinicId ? " AND a.clinic_id=$4" : "";
 
   const { rows } = await pool.query(
     `SELECT u.full_name AS doctor, COUNT(a.id) AS total
      FROM appointments a
-     JOIN users u ON a.doctor_id = u.id
-     WHERE a.clinic_id=$1
-       AND a.start_time BETWEEN $2 AND $3
+     JOIN users u ON a.doctor_id = u.id AND u.client_id = a.client_id
+     WHERE a.client_id=$1
+       AND a.start_time BETWEEN $2 AND $3${clinicFilter}
      GROUP BY u.full_name
      ORDER BY total DESC`,
-    [clinic_id, from, to]
+    params
   );
 
   res.json(rows);
@@ -27,16 +32,21 @@ router.get("/doctor-load", async (req, res) => {
 // الإلغاءات (Cancelled / No-show)
 router.get("/cancellations", async (req, res) => {
   const { from, to } = req.query;
-  const { clinic_id } = req.user;
+  const { client_id } = req.user;
+  if (!client_id) return res.status(403).json({ error: "no_tenant" });
+  const clinicId = req.query.clinic_id || null;
+
+  const params = clinicId ? [client_id, from, to, clinicId] : [client_id, from, to];
+  const clinicFilter = clinicId ? " AND clinic_id=$4" : "";
 
   const { rows } = await pool.query(
     `SELECT status, COUNT(*) AS total
      FROM appointments
-     WHERE clinic_id=$1
+     WHERE client_id=$1
        AND status IN ('cancelled','no_show')
-       AND start_time BETWEEN $2 AND $3
+       AND start_time BETWEEN $2 AND $3${clinicFilter}
      GROUP BY status`,
-    [clinic_id, from, to]
+    params
   );
 
   res.json(rows);
@@ -45,16 +55,21 @@ router.get("/cancellations", async (req, res) => {
 // أوقات الذروة (حسب الساعة)
 router.get("/peak-hours", async (req, res) => {
   const { from, to } = req.query;
-  const { clinic_id } = req.user;
+  const { client_id } = req.user;
+  if (!client_id) return res.status(403).json({ error: "no_tenant" });
+  const clinicId = req.query.clinic_id || null;
+
+  const params = clinicId ? [client_id, from, to, clinicId] : [client_id, from, to];
+  const clinicFilter = clinicId ? " AND clinic_id=$4" : "";
 
   const { rows } = await pool.query(
     `SELECT EXTRACT(HOUR FROM start_time) AS hour, COUNT(*) AS total
      FROM appointments
-     WHERE clinic_id=$1
-       AND start_time BETWEEN $2 AND $3
+     WHERE client_id=$1
+       AND start_time BETWEEN $2 AND $3${clinicFilter}
      GROUP BY hour
      ORDER BY total DESC`,
-    [clinic_id, from, to]
+    params
   );
 
   res.json(rows);

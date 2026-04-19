@@ -19,19 +19,20 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "username and password required" });
     }
 
+    // SECURITY: client_id is mandatory to prevent cross-tenant account
+    // enumeration / hijacking. Frontend must always resolve tenant via slug
+    // before invoking login.
+    if (!client_id) {
+      return res.status(400).json({ error: "client_id required" });
+    }
+
     // 1) Check users table (staff: admin, doctor, receptionist, etc.)
-    const staffQuery = client_id
-      ? `SELECT id, full_name, email, password, role, clinic_id, clinic_ids, client_id, is_active
+    const staffQuery = `SELECT id, full_name, email, password, role, clinic_id, clinic_ids, client_id, is_active
          FROM users
          WHERE (full_name=$1 OR email=$1)
            AND client_id=$2
-         LIMIT 1`
-      : `SELECT id, full_name, email, password, role, clinic_id, clinic_ids, client_id, is_active
-         FROM users
-         WHERE (full_name=$1 OR email=$1)
          LIMIT 1`;
-
-    const staffParams = client_id ? [username, client_id] : [username];
+    const staffParams = [username, client_id];
     const staff = await pool.query(staffQuery, staffParams);
 
     if (staff.rows.length) {
@@ -87,23 +88,15 @@ router.post("/login", async (req, res) => {
         },
       });
     }
-
-    // 2) Check patients table
-    const patientQuery = client_id
-      ? `SELECT id, full_name, phone, email, username, password, has_access, client_id,
+ (client_id already validated above)
+    const patientQuery = `SELECT id, full_name, phone, email, username, password, has_access, client_id,
                 date_of_birth, gender, age, medical_profile, current_visit, history
          FROM patients
          WHERE (username=$1 OR phone=$1 OR full_name=$1 OR email=$1)
            AND has_access=true
            AND client_id=$2
-         LIMIT 1`
-      : `SELECT id, full_name, phone, email, username, password, has_access, client_id,
-                date_of_birth, gender, age, medical_profile, current_visit, history
-         FROM patients
-         WHERE (username=$1 OR phone=$1 OR full_name=$1 OR email=$1)
-           AND has_access=true
          LIMIT 1`;
-
+    const patientParams = [username, client_id
     const patientParams = client_id ? [username, client_id] : [username];
     const patient = await pool.query(patientQuery, patientParams);
 

@@ -89,23 +89,23 @@ router.get("/by-patient/:patientId", async (req, res) => {
 router.get("/today", async (req, res) => {
   try {
     const { role, id, client_id } = req.user;
+    if (!client_id) return res.status(403).json({ error: "no_tenant" });
 
     if (role === "doctor") {
       const { rows } = await pool.query(
         `SELECT * FROM appointments
-         WHERE doctor_id=$1 AND DATE(start_time)=CURRENT_DATE
+         WHERE doctor_id=$1 AND client_id=$2 AND DATE(start_time)=CURRENT_DATE
          ORDER BY start_time`,
-        [id]
+        [id, client_id]
       );
       return res.json(rows.map(mapAppointmentRow));
     }
 
     if (["admin", "receptionist", "secretary"].includes(role)) {
-      const query = client_id
-        ? `SELECT * FROM appointments WHERE client_id=$1 AND DATE(start_time)=CURRENT_DATE ORDER BY start_time`
-        : `SELECT * FROM appointments WHERE DATE(start_time)=CURRENT_DATE ORDER BY start_time`;
-      const params = client_id ? [client_id] : [];
-      const { rows } = await pool.query(query, params);
+      const { rows } = await pool.query(
+        `SELECT * FROM appointments WHERE client_id=$1 AND DATE(start_time)=CURRENT_DATE ORDER BY start_time`,
+        [client_id]
+      );
       return res.json(rows.map(mapAppointmentRow));
     }
 
@@ -123,16 +123,18 @@ router.get("/today", async (req, res) => {
 router.get("/week", async (req, res) => {
   try {
     const { role, id, client_id } = req.user;
+    if (!client_id) return res.status(403).json({ error: "no_tenant" });
 
-    const baseFilter = role === "doctor" ? "doctor_id=$1" : "client_id=$1";
-    const filterParam = role === "doctor" ? id : client_id;
+    const where = role === "doctor"
+      ? "doctor_id=$1 AND client_id=$2"
+      : "client_id=$2";
 
     const { rows } = await pool.query(
       `SELECT * FROM appointments
-       WHERE ${baseFilter}
+       WHERE ${where}
        AND start_time BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
        ORDER BY start_time`,
-      [filterParam]
+      [id, client_id]
     );
     res.json(rows.map(mapAppointmentRow));
   } catch (err) {
@@ -151,15 +153,17 @@ router.get("/day", async (req, res) => {
     if (!date) return res.status(400).json({ error: "date required" });
 
     const { role, id, client_id } = req.user;
+    if (!client_id) return res.status(403).json({ error: "no_tenant" });
 
-    const baseFilter = role === "doctor" ? "doctor_id=$1" : "client_id=$1";
-    const filterParam = role === "doctor" ? id : client_id;
+    const where = role === "doctor"
+      ? "doctor_id=$1 AND client_id=$2"
+      : "client_id=$2";
 
     const { rows } = await pool.query(
       `SELECT * FROM appointments
-       WHERE ${baseFilter} AND DATE(start_time)=$2
+       WHERE ${where} AND DATE(start_time)=$3
        ORDER BY start_time`,
-      [filterParam, date]
+      [id, client_id, date]
     );
     res.json(rows.map(mapAppointmentRow));
   } catch (err) {

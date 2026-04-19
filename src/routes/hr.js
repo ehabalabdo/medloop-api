@@ -203,30 +203,78 @@ function requireHrEmployee(req, res) {
   return true;
 }
 
+/**
+ * Atomically consume a one-time bioToken and validate it against the
+ * issuance IP. Returns { ok: true } on success, or { ok: false, reason } on
+ * failure. Falls back gracefully if the issue_ip column doesn't exist
+ * (pre-migration databases).
+ *
+ * SECURITY: a bioToken is only valid if presented from the same IP that
+ * received it from /webauthn/authenticate/verify. This prevents replay attacks
+ * where a stolen token is used from a different network/device.
+ */
+async function consumeBioToken(req, employeeId, bioToken) {
+  const reqIp = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
+  let row;
+  try {
+    const r = await pool.query(
+      `DELETE FROM hr_webauthn_challenges
+       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
+       RETURNING id, issue_ip`,
+      [employeeId, bioToken]
+    );
+    row = r.rows[0];
+  } catch (e) {
+    // Pre-migration fallback (no issue_ip column)
+    const r = await pool.query(
+      `DELETE FROM hr_webauthn_challenges
+       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
+       RETURNING id`,
+      [employeeId, bioToken]
+    );
+    row = r.rows[0];
+  }
+  if (!row) return { ok: false, reason: "INVALID_TOKEN" };
+
+  // Strict IP check only when both sides are known. We don't lock down when
+  // issue_ip is null (legacy tokens / proxies stripping XFF). Loopback is
+  // always allowed for dev.
+  if (row.issue_ip && reqIp && row.issue_ip !== reqIp) {
+    const isLoopback = reqIp === "::1" || reqIp === "127.0.0.1";
+    if (!isLoopback) {
+      console.warn("[bioToken] IP mismatch — issue:", row.issue_ip, "use:", reqIp, "employee:", employeeId);
+      return { ok: false, reason: "IP_MISMATCH" };
+    }
+  }
+  return { ok: true };
+}
+
 // ============================================================
-//  DEBUG: WebAuthn diagnostic (temporary)
+//  DEBUG: WebAuthn diagnostic — DEV/STAGING ONLY
 // ============================================================
-router.get("/webauthn/debug", async (req, res) => {
-  const config = rpConfig();
-  const credCount = await pool.query(
-    `SELECT COUNT(*) AS cnt FROM hr_biometric_credentials WHERE employee_id=$1`,
-    [req.user.hr_employee_id || 0]
-  );
-  const challengeCount = await pool.query(
-    `SELECT type, COUNT(*) AS cnt FROM hr_webauthn_challenges WHERE employee_id=$1 GROUP BY type`,
-    [req.user.hr_employee_id || 0]
-  );
-  res.json({
-    NODE_ENV: process.env.NODE_ENV || "(unset)",
-    rpID: config.rpID,
-    expectedOrigin: config.origin,
-    rpName: config.rpName,
-    yourEmployeeId: req.user.hr_employee_id || null,
-    savedCredentials: Number(credCount.rows[0]?.cnt || 0),
-    pendingChallenges: challengeCount.rows,
-    serverTime: new Date().toISOString(),
+if (process.env.NODE_ENV !== "production") {
+  router.get("/webauthn/debug", async (req, res) => {
+    const config = rpConfig();
+    const credCount = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM hr_biometric_credentials WHERE employee_id=$1`,
+      [req.user.hr_employee_id || 0]
+    );
+    const challengeCount = await pool.query(
+      `SELECT type, COUNT(*) AS cnt FROM hr_webauthn_challenges WHERE employee_id=$1 GROUP BY type`,
+      [req.user.hr_employee_id || 0]
+    );
+    res.json({
+      NODE_ENV: process.env.NODE_ENV || "(unset)",
+      rpID: config.rpID,
+      expectedOrigin: config.origin,
+      rpName: config.rpName,
+      yourEmployeeId: req.user.hr_employee_id || null,
+      savedCredentials: Number(credCount.rows[0]?.cnt || 0),
+      pendingChallenges: challengeCount.rows,
+      serverTime: new Date().toISOString(),
+    });
   });
-});
+}
 
 // ============================================================
 //  1. CLINIC LOCATION  (admin)
@@ -924,12 +972,26 @@ router.post("/webauthn/authenticate/verify", async (req, res) => {
     );
 
     // Generate a one-time bioToken (2 min expiry) for use in check-in/check-out
+    // SECURITY: bind token to issuance IP + UA so a stolen token can't be reused
+    // from a different network. (issue_* columns are added by migration 002 —
+    // gracefully fall back if columns don't exist yet.)
     const bioToken = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO hr_webauthn_challenges (employee_id, challenge, type, expires_at)
-       VALUES ($1, $2, 'bio_token', NOW() + interval '2 minutes')`,
-      [hr_employee_id, bioToken]
-    );
+    const issueIp = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim() || null;
+    const issueUa = (req.headers["user-agent"] || "").toString().slice(0, 500) || null;
+    try {
+      await pool.query(
+        `INSERT INTO hr_webauthn_challenges (employee_id, challenge, type, expires_at, issue_ip, issue_user_agent)
+         VALUES ($1, $2, 'bio_token', NOW() + interval '2 minutes', $3::inet, $4)`,
+        [hr_employee_id, bioToken, issueIp, issueUa]
+      );
+    } catch (e) {
+      // Pre-migration fallback (no issue_ip column)
+      await pool.query(
+        `INSERT INTO hr_webauthn_challenges (employee_id, challenge, type, expires_at)
+         VALUES ($1, $2, 'bio_token', NOW() + interval '2 minutes')`,
+        [hr_employee_id, bioToken]
+      );
+    }
 
     res.json({ verified: true, bioToken });
   } catch (err) {
@@ -1051,14 +1113,14 @@ router.post("/attendance/check-in", async (req, res) => {
     if (!bioToken) {
       return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
     }
-    const tokenCheck = await pool.query(
-      `DELETE FROM hr_webauthn_challenges
-       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
-       RETURNING id`,
-      [hr_employee_id, bioToken]
-    );
-    if (!tokenCheck.rows.length) {
-      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid. Please verify again." });
+    const tokenResult = await consumeBioToken(req, hr_employee_id, bioToken);
+    if (!tokenResult.ok) {
+      return res.status(401).json({
+        error: tokenResult.reason,
+        message: tokenResult.reason === "IP_MISMATCH"
+          ? "Biometric token cannot be used from a different network. Please verify again."
+          : "Biometric token expired or invalid. Please verify again.",
+      });
     }
 
     // Check if already checked in today
@@ -1128,14 +1190,14 @@ router.post("/attendance/check-out", async (req, res) => {
     if (!bioToken) {
       return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
     }
-    const tokenCheck = await pool.query(
-      `DELETE FROM hr_webauthn_challenges
-       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
-       RETURNING id`,
-      [hr_employee_id, bioToken]
-    );
-    if (!tokenCheck.rows.length) {
-      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid. Please verify again." });
+    const tokenResult = await consumeBioToken(req, hr_employee_id, bioToken);
+    if (!tokenResult.ok) {
+      return res.status(401).json({
+        error: tokenResult.reason,
+        message: tokenResult.reason === "IP_MISMATCH"
+          ? "Biometric token cannot be used from a different network. Please verify again."
+          : "Biometric token expired or invalid. Please verify again.",
+      });
     }
 
     // Must have checked in today
@@ -1379,14 +1441,14 @@ router.post("/attendance/break-out", async (req, res) => {
     if (!bioToken) {
       return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
     }
-    const tokenCheck = await pool.query(
-      `DELETE FROM hr_webauthn_challenges
-       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
-       RETURNING id`,
-      [hr_employee_id, bioToken]
-    );
-    if (!tokenCheck.rows.length) {
-      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid." });
+    const tokenResult = await consumeBioToken(req, hr_employee_id, bioToken);
+    if (!tokenResult.ok) {
+      return res.status(401).json({
+        error: tokenResult.reason,
+        message: tokenResult.reason === "IP_MISMATCH"
+          ? "Biometric token cannot be used from a different network."
+          : "Biometric token expired or invalid.",
+      });
     }
 
     // Must be checked in today, not already on break, not checked out
@@ -1447,14 +1509,14 @@ router.post("/attendance/break-in", async (req, res) => {
     if (!bioToken) {
       return res.status(400).json({ error: "AUTH_REQUIRED", message: "Biometric verification required" });
     }
-    const tokenCheck = await pool.query(
-      `DELETE FROM hr_webauthn_challenges
-       WHERE employee_id=$1 AND challenge=$2 AND type='bio_token' AND expires_at > NOW()
-       RETURNING id`,
-      [hr_employee_id, bioToken]
-    );
-    if (!tokenCheck.rows.length) {
-      return res.status(401).json({ error: "INVALID_TOKEN", message: "Biometric token expired or invalid." });
+    const tokenResult = await consumeBioToken(req, hr_employee_id, bioToken);
+    if (!tokenResult.ok) {
+      return res.status(401).json({
+        error: tokenResult.reason,
+        message: tokenResult.reason === "IP_MISMATCH"
+          ? "Biometric token cannot be used from a different network."
+          : "Biometric token expired or invalid.",
+      });
     }
 
     // Must be on break (last event is break_out)
