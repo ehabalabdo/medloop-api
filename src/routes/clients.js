@@ -58,13 +58,61 @@ router.get("/", requireSuperAdmin, async (req, res) => {
 
 /**
  * GET /clients/:id
+ * GET /clients/audit-log (super_admin only)
+ * Query: client_id, user_id, method, status, since, until, limit (max 500), offset
+ * Returns recent audit entries (metadata only, never bodies).
+ * Defined BEFORE /:id to avoid route collision.
+ */
+router.get("/audit-log", requireSuperAdmin, async (req, res) => {
+  try {
+    const {
+      client_id, user_id, method, status,
+      since, until, limit, offset,
+    } = req.query;
+
+    const lim = Math.min(parseInt(limit, 10) || 100, 500);
+    const off = Math.max(parseInt(offset, 10) || 0, 0);
+
+    const where = [];
+    const params = [];
+    const push = (cond, val) => { params.push(val); where.push(cond.replace("$$", `$${params.length}`)); };
+
+    if (client_id) push("client_id = $$", client_id);
+    if (user_id) push("user_id = $$", user_id);
+    if (method) push("method = $$", String(method).toUpperCase());
+    if (status) push("status_code = $$", parseInt(status, 10));
+    if (since) push("created_at >= $$", since);
+    if (until) push("created_at <= $$", until);
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    params.push(lim, off);
+
+    const { rows } = await pool.query(
+      `SELECT id, user_id, user_type, client_id, method, path, status_code,
+              ip, user_agent, duration_ms, created_at
+         FROM audit_log
+         ${whereSql}
+         ORDER BY created_at DESC
+         LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+    res.json({ entries: rows, limit: lim, offset: off });
+  } catch (err) {
+    console.error("GET /clients/audit-log error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/**
  * Get a single client by ID (super_admin only)
  */
 router.get("/:id", requireSuperAdmin, async (req, res) => {
   try {
+    const idNum = parseInt(req.params.id, 10);
+    if (!Number.isFinite(idNum)) return res.status(400).json({ error: "Invalid client id" });
     const { rows } = await pool.query(
       "SELECT * FROM clients WHERE id=$1 LIMIT 1",
-      [parseInt(req.params.id)]
+      [idNum]
     );
     if (rows.length === 0) {
       return res.status(404).json({ error: "Client not found" });
