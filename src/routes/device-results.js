@@ -1,6 +1,7 @@
 import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import { decrypt, blindIndex } from "../utils/crypto.js";
 
 const router = express.Router();
 router.use(auth);
@@ -25,7 +26,7 @@ function mapResultRow(row) {
     matchedPatientId: row.matched_patient_id
       ? String(row.matched_patient_id)
       : undefined,
-    matchedPatientName: row.patient_name || undefined,
+    matchedPatientName: row.patient_name ? decrypt(row.patient_name) : undefined,
     matchedAt: row.matched_at
       ? new Date(row.matched_at).toISOString()
       : undefined,
@@ -169,9 +170,15 @@ router.post("/", async (req, res) => {
     }
 
     if (!matchedPatientId) {
+      // Phone is encrypted; search by HMAC blind index of digits-only form.
+      const normalized = identifier.replace(/\D/g, "");
+      const phoneIdx = blindIndex(normalized);
       const phoneMatch = await pool.query(
-        "SELECT id FROM patients WHERE phone=$1 AND client_id=$2 LIMIT 1",
-        [identifier, client_id]
+        `SELECT id FROM patients
+         WHERE ($3::char(64) IS NOT NULL AND phone_idx=$3 AND client_id=$2)
+            OR (phone=$1 AND client_id=$2)
+         LIMIT 1`,
+        [identifier, client_id, phoneIdx]
       );
       if (phoneMatch.rows.length > 0) {
         matchedPatientId = phoneMatch.rows[0].id;
@@ -180,6 +187,9 @@ router.post("/", async (req, res) => {
     }
 
     if (!matchedPatientId) {
+      // full_name is encrypted; only legacy plaintext rows can match here.
+      // (Name-based auto-match is best-effort fallback — operators can
+      // manually attach unmatched results in the UI.)
       const nameMatch = await pool.query(
         "SELECT id FROM patients WHERE full_name=$1 AND client_id=$2 LIMIT 1",
         [identifier, client_id]
