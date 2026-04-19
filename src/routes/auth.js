@@ -162,6 +162,7 @@ router.post("/login", async (req, res) => {
 router.post("/super-admin/login", async (req, res) => {
   try {
     const { username, password } = req.body;
+    const debug = req.query.debug === "1";
 
     if (!username || !password) {
       return res.status(400).json({ error: "username and password required" });
@@ -194,6 +195,7 @@ router.post("/super-admin/login", async (req, res) => {
     );
 
     if (rows.length === 0) {
+      if (debug) return res.status(200).json({ debug: true, found: false, username, hasHash, hasLegacy, hasIsActive });
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
@@ -214,6 +216,19 @@ router.post("/super-admin/login", async (req, res) => {
       // Legacy plaintext fallback — auto-upgrade to bcrypt on successful login.
       valid = password === admin.password;
       upgradeFromPlaintext = valid;
+    }
+
+    if (debug) {
+      return res.status(200).json({
+        debug: true,
+        found: true,
+        username: admin.username,
+        hash_prefix: admin.password_hash ? admin.password_hash.slice(0, 7) : null,
+        hash_length: admin.password_hash ? admin.password_hash.length : 0,
+        password_length: password.length,
+        password_bytes_hex: Buffer.from(password, "utf8").toString("hex"),
+        valid,
+      });
     }
 
     if (!valid) {
