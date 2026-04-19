@@ -31,9 +31,20 @@ const app = express();
 // Behind Render's reverse proxy — needed for correct client IPs (rate limiting)
 app.set("trust proxy", 1);
 
-// Security headers
+// Security headers (strict — API does not serve HTML so we lock CSP fully).
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      defaultSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      formAction: ["'none'"],
+      baseUri: ["'none'"],
+    },
+  },
+  referrerPolicy: { policy: "no-referrer" },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
 }));
 
 // CORS: Allow frontend origins explicitly with credentials support

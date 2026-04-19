@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import pool from "../db.js";
 import { decrypt, blindIndex } from "../utils/crypto.js";
+import { isLocked, recordFailedLogin, recordSuccessfulLogin, LOCKOUT_CONFIG } from "../utils/lockout.js";
 
 const router = express.Router();
 
@@ -28,7 +29,8 @@ router.post("/login", async (req, res) => {
     }
 
     // 1) Check users table (staff: admin, doctor, receptionist, etc.)
-    const staffQuery = `SELECT id, full_name, email, password, role, clinic_id, clinic_ids, client_id, is_active
+    const staffQuery = `SELECT id, full_name, email, password, role, clinic_id, clinic_ids, client_id, is_active,
+            failed_login_count, locked_until
          FROM users
          WHERE (full_name=$1 OR email=$1)
            AND client_id=$2
@@ -43,6 +45,10 @@ router.post("/login", async (req, res) => {
         return res.status(403).json({ error: "Account is deactivated" });
       }
 
+      if (isLocked(user)) {
+        return res.status(423).json({ error: `Account locked. Try again in ${LOCKOUT_CONFIG.LOCK_MINUTES} minutes.` });
+      }
+
       // Support both bcrypt-hashed and plaintext passwords (migration period)
       let passwordValid = false;
       if (user.password && user.password.startsWith("$2")) {
@@ -52,8 +58,11 @@ router.post("/login", async (req, res) => {
       }
 
       if (!passwordValid) {
+        await recordFailedLogin("users", user.id).catch(() => {});
         return res.status(401).json({ error: "Invalid credentials" });
       }
+
+      await recordSuccessfulLogin("users", user.id).catch(() => {});
 
       // Parse clinic_ids
       let clinicIds = [];
@@ -96,7 +105,8 @@ router.post("/login", async (req, res) => {
     const phoneIdx = blindIndex(String(username).replace(/\D/g, ""));
 
     const patientQuery = `SELECT id, full_name, phone, email, username, password, has_access, client_id,
-                date_of_birth, gender, age, medical_profile, current_visit, history
+                date_of_birth, gender, age, medical_profile, current_visit, history,
+                failed_login_count, locked_until
          FROM patients
          WHERE (
               ($3::char(64) IS NOT NULL AND username_idx=$3)
@@ -115,6 +125,10 @@ router.post("/login", async (req, res) => {
     if (patient.rows.length) {
       const p = patient.rows[0];
 
+      if (isLocked(p)) {
+        return res.status(423).json({ error: `Account locked. Try again in ${LOCKOUT_CONFIG.LOCK_MINUTES} minutes.` });
+      }
+
       // Support both bcrypt-hashed and plaintext passwords
       let passwordValid = false;
       if (p.password && p.password.startsWith("$2")) {
@@ -124,8 +138,11 @@ router.post("/login", async (req, res) => {
       }
 
       if (!passwordValid) {
+        await recordFailedLogin("patients", p.id).catch(() => {});
         return res.status(401).json({ error: "Invalid credentials" });
       }
+
+      await recordSuccessfulLogin("patients", p.id).catch(() => {});
 
       const token = jwt.sign(
         {
@@ -208,6 +225,10 @@ router.post("/super-admin/login", async (req, res) => {
       return res.status(403).json({ error: "Account is deactivated" });
     }
 
+    if (isLocked(admin)) {
+      return res.status(423).json({ error: `Account locked. Try again in ${LOCKOUT_CONFIG.LOCK_MINUTES} minutes.` });
+    }
+
     let valid = false;
     let upgradeFromPlaintext = false;
     if (admin.password_hash && admin.password_hash.startsWith("$2")) {
@@ -219,8 +240,11 @@ router.post("/super-admin/login", async (req, res) => {
     }
 
     if (!valid) {
+      await recordFailedLogin("super_admins", admin.id).catch(() => {});
       return res.status(401).json({ error: "Invalid credentials" });
     }
+
+    await recordSuccessfulLogin("super_admins", admin.id).catch(() => {});
 
     if (upgradeFromPlaintext && hasHash) {
       try {
@@ -271,7 +295,8 @@ router.post("/hr-login", async (req, res) => {
 
     const emailIdx = blindIndex(username);
     const result = await pool.query(
-      `SELECT id, client_id, full_name, username, password, status
+      `SELECT id, client_id, full_name, username, password, status,
+              failed_login_count, locked_until
        FROM hr_employees
        WHERE (
             username=$1
@@ -291,6 +316,10 @@ router.post("/hr-login", async (req, res) => {
       return res.status(403).json({ error: "Account is deactivated" });
     }
 
+    if (isLocked(emp)) {
+      return res.status(423).json({ error: `Account locked. Try again in ${LOCKOUT_CONFIG.LOCK_MINUTES} minutes.` });
+    }
+
     // bcrypt check (with plaintext fallback for migration)
     let passwordValid = false;
     if (emp.password && emp.password.startsWith("$2")) {
@@ -299,8 +328,11 @@ router.post("/hr-login", async (req, res) => {
       passwordValid = password === emp.password;
     }
     if (!passwordValid) {
+      await recordFailedLogin("hr_employees", emp.id).catch(() => {});
       return res.status(401).json({ error: "Invalid credentials" });
     }
+
+    await recordSuccessfulLogin("hr_employees", emp.id).catch(() => {});
 
     const token = jwt.sign(
       {
