@@ -7,6 +7,10 @@ import { encrypt, decrypt } from "../utils/crypto.js";
 const router = express.Router();
 router.use(auth);
 
+const APPOINTMENT_STATUSES = [
+  "scheduled", "checked_in", "in_progress", "completed", "cancelled", "no_show",
+];
+
 /** Map a DB row to frontend-compatible Appointment shape */
 function mapAppointmentRow(row) {
   return {
@@ -216,12 +220,17 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "patient_id and start_time/date required" });
     }
 
+    // Bound free-text fields and status
+    const safeReason = String(reason || "").slice(0, 1000);
+    const safeName = String(pName || "").slice(0, 200);
+    const safeStatus = APPOINTMENT_STATUSES.includes(status) ? status : "scheduled";
+
     const { rows } = await pool.query(
       `INSERT INTO appointments
        (patient_id, patient_name, clinic_id, doctor_id, start_time, end_time, status, reason, client_id, created_at, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
        RETURNING *`,
-      [pId, encrypt(pName), cId, dId, startTime, endTime, status || "scheduled", encrypt(reason || ""), client_id, userId]
+      [pId, encrypt(safeName), cId, dId, startTime, endTime, safeStatus, encrypt(safeReason), client_id, userId]
     );
 
     res.status(201).json(mapAppointmentRow(rows[0]));
@@ -260,12 +269,15 @@ router.put("/:id", async (req, res) => {
     let idx = 1;
 
     if (status !== undefined) {
+      if (!APPOINTMENT_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `status must be one of: ${APPOINTMENT_STATUSES.join(", ")}` });
+      }
       sets.push(`status=$${idx++}`);
       params.push(status);
     }
     if (reason !== undefined) {
       sets.push(`reason=$${idx++}`);
-      params.push(encrypt(reason));
+      params.push(encrypt(String(reason || "").slice(0, 1000)));
     }
 
     const cId = clinic_id || (clinicId ? parseInt(clinicId) : undefined);
@@ -329,16 +341,23 @@ router.put("/:id/status", async (req, res) => {
     const { role, id: userId, client_id } = req.user;
     const { status } = req.body;
 
+    if (!APPOINTMENT_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${APPOINTMENT_STATUSES.join(", ")}` });
+    }
+
     if (!["admin", "doctor", "receptionist", "secretary", "super_admin"].includes(role)) {
       return res.status(403).json({ error: "Forbidden" });
     }
+
+    const apptId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(apptId)) return res.status(400).json({ error: "Invalid appointment id" });
 
     const query = client_id
       ? "UPDATE appointments SET status=$1, updated_by=$2, updated_at=NOW() WHERE id=$3 AND client_id=$4"
       : "UPDATE appointments SET status=$1, updated_by=$2, updated_at=NOW() WHERE id=$3";
     const params = client_id
-      ? [status, userId, parseInt(req.params.id), client_id]
-      : [status, userId, parseInt(req.params.id)];
+      ? [status, userId, apptId, client_id]
+      : [status, userId, apptId];
 
     await pool.query(query, params);
     res.json({ success: true });
