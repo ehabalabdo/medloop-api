@@ -155,7 +155,9 @@ router.post("/login", async (req, res) => {
 
 /**
  * POST /auth/super-admin/login
- * For platform super admin login
+ * For platform super admin login. Uses bcrypt-hashed passwords stored in
+ * super_admins.password_hash. Falls back to legacy plaintext "password"
+ * column ONLY if the row has not been migrated yet (auto-upgrades on success).
  */
 router.post("/super-admin/login", async (req, res) => {
   try {
@@ -165,16 +167,75 @@ router.post("/super-admin/login", async (req, res) => {
       return res.status(400).json({ error: "username and password required" });
     }
 
-    const result = await pool.query(
-      "SELECT id, username, name FROM super_admins WHERE username=$1 AND password=$2 LIMIT 1",
-      [username, password]
+    // Detect whether the legacy plaintext "password" column still exists,
+    // so this works on freshly migrated and not-yet-migrated databases.
+    const colInfo = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name='super_admins'
+         AND column_name IN ('password','password_hash','is_active')`
+    );
+    const cols = new Set(colInfo.rows.map((r) => r.column_name));
+    const hasHash      = cols.has("password_hash");
+    const hasLegacy    = cols.has("password");
+    const hasIsActive  = cols.has("is_active");
+
+    const selectCols = [
+      "id",
+      "username",
+      "name",
+      hasHash ? "password_hash" : null,
+      hasLegacy ? "password" : null,
+      hasIsActive ? "is_active" : null,
+    ].filter(Boolean).join(", ");
+
+    const { rows } = await pool.query(
+      `SELECT ${selectCols} FROM super_admins WHERE username=$1 LIMIT 1`,
+      [username]
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    const admin = result.rows[0];
+    const admin = rows[0];
+
+    if (hasIsActive && admin.is_active === false) {
+      return res.status(403).json({ error: "Account is deactivated" });
+    }
+
+    let valid = false;
+    let upgradeFromPlaintext = false;
+    if (admin.password_hash && admin.password_hash.startsWith("$2")) {
+      valid = await bcrypt.compare(password, admin.password_hash);
+    } else if (admin.password) {
+      // Legacy plaintext fallback — auto-upgrade to bcrypt on successful login.
+      valid = password === admin.password;
+      upgradeFromPlaintext = valid;
+    }
+
+    if (!valid) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    if (upgradeFromPlaintext && hasHash) {
+      try {
+        const newHash = await bcrypt.hash(password, 12);
+        await pool.query(
+          "UPDATE super_admins SET password_hash=$1, updated_at=NOW() WHERE id=$2",
+          [newHash, admin.id]
+        );
+      } catch (e) {
+        console.error("Failed to upgrade super_admin password to bcrypt:", e);
+      }
+    }
+
+    if (hasIsActive) {
+      pool.query(
+        "UPDATE super_admins SET last_login_at=NOW() WHERE id=$1",
+        [admin.id]
+      ).catch(() => {});
+    }
+
     const token = jwt.sign(
       { id: admin.id, type: "super_admin", role: "super_admin" },
       process.env.JWT_SECRET,
