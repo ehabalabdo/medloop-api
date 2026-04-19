@@ -207,6 +207,9 @@ router.post("/super-admin/login", async (req, res) => {
     let upgradeFromPlaintext = false;
     if (admin.password_hash && admin.password_hash.startsWith("$2")) {
       valid = await bcrypt.compare(password, admin.password_hash);
+      console.log("[super-admin/login] bcrypt compare for", username,
+        "hash_prefix=", admin.password_hash.slice(0,7),
+        "pwd_len=", password.length, "result=", valid);
     } else if (admin.password) {
       // Legacy plaintext fallback — auto-upgrade to bcrypt on successful login.
       valid = password === admin.password;

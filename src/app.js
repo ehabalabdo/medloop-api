@@ -86,6 +86,7 @@ app.use("/hr", hrRouter);
 app.use("/catalog", catalogRouter);
 
 app.get("/", (_, res) => res.send("MedLoop API running"));
+app.get("/_version", (_, res) => res.json({ build: "sa-bcrypt-v1", time: new Date().toISOString() }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
