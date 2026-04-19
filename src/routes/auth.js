@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import pool from "../db.js";
 import { decrypt, blindIndex } from "../utils/crypto.js";
 import { isLocked, recordFailedLogin, recordSuccessfulLogin, LOCKOUT_CONFIG } from "../utils/lockout.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -170,7 +171,7 @@ router.post("/login", async (req, res) => {
 
     res.status(401).json({ error: "Invalid credentials" });
   } catch (err) {
-    console.error("Login error:", err);
+    logger.error("Login error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -254,7 +255,7 @@ router.post("/super-admin/login", async (req, res) => {
           [newHash, admin.id]
         );
       } catch (e) {
-        console.error("Failed to upgrade super_admin password to bcrypt:", e);
+        logger.error("Failed to upgrade super_admin password to bcrypt:", e);
       }
     }
 
@@ -277,7 +278,7 @@ router.post("/super-admin/login", async (req, res) => {
       admin: { id: admin.id, username: admin.username, name: admin.name },
     });
   } catch (err) {
-    console.error("Super admin login error:", err);
+    logger.error("Super admin login error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -357,7 +358,7 @@ router.post("/hr-login", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("HR login error:", err);
+    logger.error("HR login error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -489,7 +490,7 @@ router.post("/migrate-encryption", async (req, res) => {
 
     return res.json({ ok: true, migrated: stats });
   } catch (err) {
-    console.error("POST /auth/migrate-encryption error:", err);
+    logger.error("POST /auth/migrate-encryption error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -526,7 +527,7 @@ router.post("/migrate-passwords", async (req, res) => {
     }
     return res.json({ ok: true, hashed: stats });
   } catch (err) {
-    console.error("POST /auth/migrate-passwords error:", err);
+    logger.error("POST /auth/migrate-passwords error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

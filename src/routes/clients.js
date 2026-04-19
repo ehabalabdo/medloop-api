@@ -1,8 +1,9 @@
-import express from "express";
+﻿import express from "express";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ const router = express.Router();
 
 /**
  * GET /clients/by-slug/:slug
- * Public — used by frontend to resolve tenant from URL
+ * Public â€” used by frontend to resolve tenant from URL
  */
 router.get("/by-slug/:slug", async (req, res) => {
   try {
@@ -25,7 +26,7 @@ router.get("/by-slug/:slug", async (req, res) => {
     }
     res.json(mapClientRow(rows[0]));
   } catch (err) {
-    console.error("GET /clients/by-slug error:", err);
+    logger.error("GET /clients/by-slug error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -51,7 +52,7 @@ router.get("/", requireSuperAdmin, async (req, res) => {
     );
     res.json(rows.map(mapClientRow));
   } catch (err) {
-    console.error("GET /clients error:", err);
+    logger.error("GET /clients error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -98,7 +99,7 @@ router.get("/audit-log", requireSuperAdmin, async (req, res) => {
     );
     res.json({ entries: rows, limit: lim, offset: off });
   } catch (err) {
-    console.error("GET /clients/audit-log error:", err);
+    logger.error("GET /clients/audit-log error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -160,7 +161,7 @@ router.get("/security-alerts", requireSuperAdmin, async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("GET /clients/security-alerts error:", err);
+    logger.error("GET /clients/security-alerts error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -181,7 +182,7 @@ router.get("/:id", requireSuperAdmin, async (req, res) => {
     }
     res.json(mapClientRow(rows[0]));
   } catch (err) {
-    console.error("GET /clients/:id error:", err);
+    logger.error("GET /clients/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -210,7 +211,7 @@ router.post("/", requireSuperAdmin, async (req, res) => {
     if (err.code === "23505") {
       return res.status(409).json({ error: "Slug already exists" });
     }
-    console.error("POST /clients error:", err);
+    logger.error("POST /clients error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -246,7 +247,7 @@ router.post("/:id/owner", requireSuperAdmin, async (req, res) => {
 
     res.status(201).json({ userId });
   } catch (err) {
-    console.error("POST /clients/:id/owner error:", err);
+    logger.error("POST /clients/:id/owner error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -276,7 +277,7 @@ router.put("/:id/extend-trial", requireSuperAdmin, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT extend-trial error:", err);
+    logger.error("PUT extend-trial error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -300,7 +301,7 @@ router.put("/:id/trial-end-date", requireSuperAdmin, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT trial-end-date error:", err);
+    logger.error("PUT trial-end-date error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -336,7 +337,7 @@ router.put(
 
       res.json({ success: true });
     } catch (err) {
-      console.error("PUT extend-subscription error:", err);
+      logger.error("PUT extend-subscription error:", err);
       res.status(500).json({ error: "Server error" });
     }
   }
@@ -355,7 +356,7 @@ router.put("/:id/suspend", requireSuperAdmin, async (req, res) => {
     );
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT suspend error:", err);
+    logger.error("PUT suspend error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -373,7 +374,7 @@ router.put("/:id/activate", requireSuperAdmin, async (req, res) => {
     );
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT activate error:", err);
+    logger.error("PUT activate error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -397,7 +398,7 @@ router.put("/:id/features", requireSuperAdmin, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT features error:", err);
+    logger.error("PUT features error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -444,7 +445,7 @@ router.patch("/:id", requireSuperAdmin, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PATCH /clients/:id error:", err);
+    logger.error("PATCH /clients/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -478,7 +479,7 @@ router.get("/:id/stats", requireSuperAdmin, async (req, res) => {
       appointmentsCount: appointments.rows[0]?.count || 0,
     });
   } catch (err) {
-    console.error("GET /clients/:id/stats error:", err);
+    logger.error("GET /clients/:id/stats error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -525,7 +526,7 @@ router.delete("/:id", requireSuperAdmin, async (req, res) => {
     if (client) {
       try { await client.query("ROLLBACK"); } catch {}
     }
-    console.error("DELETE /clients/:id error:", err);
+    logger.error("DELETE /clients/:id error:", err);
     res.status(500).json({ error: "Server error" });
   } finally {
     if (client) client.release();
@@ -583,7 +584,7 @@ router.post("/:id/bridge-key/rotate", requireSuperAdmin, async (req, res) => {
       warning: "Store this key now. It will not be shown again.",
     });
   } catch (err) {
-    console.error("POST /clients/:id/bridge-key/rotate error:", err);
+    logger.error("POST /clients/:id/bridge-key/rotate error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

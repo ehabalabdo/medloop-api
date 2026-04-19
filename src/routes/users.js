@@ -1,8 +1,9 @@
-import express from "express";
+﻿import express from "express";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -70,7 +71,7 @@ router.get("/", async (req, res) => {
 
     res.json(users);
   } catch (err) {
-    console.error("GET /users error:", err);
+    logger.error("GET /users error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -125,7 +126,7 @@ router.post("/", async (req, res) => {
     if (err.code === "23505") {
       return res.status(409).json({ error: "User already exists" });
     }
-    console.error("POST /users error:", err);
+    logger.error("POST /users error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -181,7 +182,7 @@ router.post("/doctors", async (req, res) => {
       throw err;
     }
   } catch (err) {
-    console.error("POST /users/doctors error:", err);
+    logger.error("POST /users/doctors error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -250,7 +251,7 @@ router.put("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /users/:id error:", err);
+    logger.error("PUT /users/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -276,7 +277,7 @@ router.delete("/:id", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /users/:id error:", err);
+    logger.error("DELETE /users/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

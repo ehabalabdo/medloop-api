@@ -1,14 +1,15 @@
+﻿import logger from "../utils/logger.js";
 /**
- * Bridge Agent endpoints — auth via X-Bridge-Key (per-client shared secret),
+ * Bridge Agent endpoints â€” auth via X-Bridge-Key (per-client shared secret),
  * NOT via JWT. These are called by the on-prem Bridge Agent that pushes
  * lab device results into MedLoop.
  *
  * Mounted at: /bridge
  *
  * Endpoints:
- *   POST /bridge/device-results        — single result
- *   POST /bridge/device-results/batch  — array of results
- *   POST /bridge/heartbeat             — bridge health ping
+ *   POST /bridge/device-results        â€” single result
+ *   POST /bridge/device-results/batch  â€” array of results
+ *   POST /bridge/heartbeat             â€” bridge health ping
  *
  * Tenancy: req.user.client_id is set by bridgeKeyAuth from the matched key,
  * never trusted from the request body.
@@ -22,7 +23,7 @@ import rateLimit from "express-rate-limit";
 
 const router = express.Router();
 
-// Per-IP rate limit on bridge endpoints — devices are bursty but not extreme.
+// Per-IP rate limit on bridge endpoints â€” devices are bursty but not extreme.
 // 600 results/min should comfortably cover even a busy clinic lab.
 const bridgeLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -43,7 +44,7 @@ async function checkAllowedIp(req, res, next) {
       [req.user.client_id]
     );
     const list = r.rows[0]?.bridge_allowed_ips;
-    if (!list) return next(); // no allowlist configured — accept
+    if (!list) return next(); // no allowlist configured â€” accept
     const allowed = list.split(",").map(s => s.trim()).filter(Boolean);
     if (allowed.includes(req.ip)) return next();
     return res.status(403).json({ error: "ip_not_allowed" });
@@ -76,7 +77,7 @@ async function insertResult(clientId, body) {
     throw e;
   }
 
-  // Verify device belongs to this tenant — prevents stolen key on one
+  // Verify device belongs to this tenant â€” prevents stolen key on one
   // tenant from posting results that get attributed to another's device.
   const dev = await pool.query(
     "SELECT id FROM devices WHERE id=$1::uuid AND client_id=$2 LIMIT 1",
@@ -137,7 +138,7 @@ router.post("/device-results", async (req, res) => {
     const out = await insertResult(req.user.client_id, req.body || {});
     res.status(201).json(out);
   } catch (err) {
-    console.error("POST /bridge/device-results error:", err);
+    logger.error("POST /bridge/device-results error:", err);
     res.status(err.status || 500).json({ error: err.status ? err.message : "Server error" });
   }
 });

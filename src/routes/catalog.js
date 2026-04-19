@@ -1,6 +1,7 @@
-import express from "express";
+﻿import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -20,7 +21,7 @@ router.get("/services", async (req, res) => {
     );
     res.json(rows.map(mapService));
   } catch (err) {
-    console.error("GET /catalog/services error:", err);
+    logger.error("GET /catalog/services error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -51,7 +52,7 @@ router.post("/services", async (req, res) => {
     );
     res.status(201).json(mapService(rows[0]));
   } catch (err) {
-    console.error("POST /catalog/services error:", err);
+    logger.error("POST /catalog/services error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -86,7 +87,7 @@ router.put("/services/:id", async (req, res) => {
     if (rows.length === 0) return res.status(404).json({ error: "Not found" });
     res.json(mapService(rows[0]));
   } catch (err) {
-    console.error("PUT /catalog/services error:", err);
+    logger.error("PUT /catalog/services error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -104,7 +105,7 @@ router.delete("/services/:id", async (req, res) => {
     await pool.query(`DELETE FROM clinic_services WHERE id=$1 AND client_id=$2`, [id, client_id]);
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /catalog/services error:", err);
+    logger.error("DELETE /catalog/services error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -177,7 +178,7 @@ router.post("/services/import", async (req, res) => {
 
     res.json({ created, updated, failed, errors });
   } catch (err) {
-    console.error("POST /catalog/services/import error:", err);
+    logger.error("POST /catalog/services/import error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -198,7 +199,7 @@ router.get("/medications", async (req, res) => {
     );
     res.json(rows.map(mapMedication));
   } catch (err) {
-    console.error("GET /catalog/medications error:", err);
+    logger.error("GET /catalog/medications error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -229,7 +230,7 @@ router.post("/medications", async (req, res) => {
     if (err.code === "23505") {
       return res.status(409).json({ error: "Medication already exists with same name/strength/form" });
     }
-    console.error("POST /catalog/medications error:", err);
+    logger.error("POST /catalog/medications error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -269,7 +270,7 @@ router.put("/medications/:id", async (req, res) => {
     if (rows.length === 0) return res.status(404).json({ error: "Not found" });
     res.json(mapMedication(rows[0]));
   } catch (err) {
-    console.error("PUT /catalog/medications error:", err);
+    logger.error("PUT /catalog/medications error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -287,7 +288,7 @@ router.delete("/medications/:id", async (req, res) => {
     await pool.query(`DELETE FROM clinic_medications WHERE id=$1 AND client_id=$2`, [id, client_id]);
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /catalog/medications error:", err);
+    logger.error("DELETE /catalog/medications error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -380,7 +381,7 @@ router.post("/medications/import", async (req, res) => {
 
     res.json({ created, updated, failed, errors });
   } catch (err) {
-    console.error("POST /catalog/medications/import error:", err);
+    logger.error("POST /catalog/medications/import error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

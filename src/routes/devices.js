@@ -1,6 +1,7 @@
-import express from "express";
+﻿import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -54,7 +55,7 @@ router.get("/", async (req, res) => {
     const { rows } = await pool.query(query, params);
     res.json(rows.map(mapDeviceRow));
   } catch (err) {
-    console.error("GET /devices error:", err);
+    logger.error("GET /devices error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -109,7 +110,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(mapDeviceRow(rows[0]));
   } catch (err) {
-    console.error("POST /devices error:", err);
+    logger.error("POST /devices error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -173,7 +174,7 @@ router.put("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /devices/:id error:", err);
+    logger.error("PUT /devices/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -195,7 +196,7 @@ router.put("/:id/last-seen", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /devices/:id/last-seen error:", err);
+    logger.error("PUT /devices/:id/last-seen error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -221,7 +222,7 @@ router.delete("/:id", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /devices/:id error:", err);
+    logger.error("DELETE /devices/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

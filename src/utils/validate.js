@@ -1,6 +1,6 @@
 /**
  * Lightweight runtime input validators.
- * Intentionally tiny — no Joi/Zod dependency.
+ * Intentionally tiny â€” no Joi/Zod dependency.
  *
  * Each helper returns a string (the trimmed/normalized value) or throws
  * a ValidationError carrying a 400-friendly message.

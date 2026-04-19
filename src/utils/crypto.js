@@ -1,3 +1,4 @@
+﻿import logger from "../utils/logger.js";
 /**
  * AES-256-GCM encryption helpers for column-level PII protection.
  *
@@ -11,7 +12,7 @@
  *   on encrypted columns (e.g. login by email/username).
  *
  * Key requirement: ENCRYPTION_KEY must be 32 bytes (64 hex chars).
- *   Generate with:  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+ *   Generate with:  node -e "logger.info(require('crypto').randomBytes(32).toString('hex'))"
  */
 
 import crypto from "crypto";
@@ -68,7 +69,7 @@ export function decrypt(value) {
   if (!value.startsWith(PREFIX)) return value;
   const key = getKey();
   if (!key) {
-    // Encryption disabled — cannot decrypt. Return marker so it's obvious in logs.
+    // Encryption disabled â€” cannot decrypt. Return marker so it's obvious in logs.
     return "[encrypted]";
   }
   try {
@@ -81,7 +82,7 @@ export function decrypt(value) {
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
   } catch (err) {
-    console.error("[crypto] decrypt failed:", err.message);
+    logger.error("[crypto] decrypt failed:", err.message);
     return "[decrypt-error]";
   }
 }

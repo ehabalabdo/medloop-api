@@ -1,7 +1,8 @@
-import express from "express";
+﻿import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { encrypt, decrypt } from "../utils/crypto.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -48,7 +49,7 @@ router.get("/", async (req, res) => {
     const { rows } = await pool.query(query, params);
     res.json(rows.map(mapInvoiceRow));
   } catch (err) {
-    console.error("GET /invoices error:", err);
+    logger.error("GET /invoices error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -113,7 +114,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(mapInvoiceRow(rows[0]));
   } catch (err) {
-    console.error("POST /invoices error:", err);
+    logger.error("POST /invoices error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -192,7 +193,7 @@ router.put("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /invoices/:id error:", err);
+    logger.error("PUT /invoices/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -217,7 +218,7 @@ router.delete("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /invoices/:id error:", err);
+    logger.error("DELETE /invoices/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

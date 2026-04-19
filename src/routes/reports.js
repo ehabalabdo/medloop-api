@@ -5,7 +5,7 @@ import { auth } from "../middleware/auth.js";
 const router = express.Router();
 router.use(auth);
 
-// ضغط الأطباء (عدد المواعيد بالأسبوع)
+// Ø¶ØºØ· Ø§Ù„Ø£Ø·Ø¨Ø§Ø¡ (Ø¹Ø¯Ø¯ Ø§Ù„Ù…ÙˆØ§Ø¹ÙŠØ¯ Ø¨Ø§Ù„Ø£Ø³Ø¨ÙˆØ¹)
 router.get("/doctor-load", async (req, res) => {
   const { from, to } = req.query;
   const { client_id } = req.user;
@@ -29,7 +29,7 @@ router.get("/doctor-load", async (req, res) => {
   res.json(rows);
 });
 
-// الإلغاءات (Cancelled / No-show)
+// Ø§Ù„Ø¥Ù„ØºØ§Ø¡Ø§Øª (Cancelled / No-show)
 router.get("/cancellations", async (req, res) => {
   const { from, to } = req.query;
   const { client_id } = req.user;
@@ -52,7 +52,7 @@ router.get("/cancellations", async (req, res) => {
   res.json(rows);
 });
 
-// أوقات الذروة (حسب الساعة)
+// Ø£ÙˆÙ‚Ø§Øª Ø§Ù„Ø°Ø±ÙˆØ© (Ø­Ø³Ø¨ Ø§Ù„Ø³Ø§Ø¹Ø©)
 router.get("/peak-hours", async (req, res) => {
   const { from, to } = req.query;
   const { client_id } = req.user;

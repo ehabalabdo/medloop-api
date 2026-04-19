@@ -1,6 +1,7 @@
-import express from "express";
+﻿import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -38,7 +39,7 @@ router.get("/", async (req, res) => {
 
     res.json(clinics);
   } catch (err) {
-    console.error("GET /clinics error:", err);
+    logger.error("GET /clinics error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -76,7 +77,7 @@ router.post("/", async (req, res) => {
       clientId: rows[0].client_id,
     });
   } catch (err) {
-    console.error("POST /clinics error:", err);
+    logger.error("POST /clinics error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -131,7 +132,7 @@ router.put("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /clinics/:id error:", err);
+    logger.error("PUT /clinics/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -161,7 +162,7 @@ router.put("/:id/status", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /clinics/:id/status error:", err);
+    logger.error("PUT /clinics/:id/status error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -187,7 +188,7 @@ router.delete("/:id", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /clinics/:id error:", err);
+    logger.error("DELETE /clinics/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

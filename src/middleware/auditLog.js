@@ -1,3 +1,4 @@
+﻿import logger from "../utils/logger.js";
 /**
  * Audit logging middleware for state-changing requests.
  *
@@ -50,7 +51,7 @@ export function auditLog(req, res, next) {
       } catch (err) {
         // table may not exist yet (pre-migration). Don't spam logs.
         if (err.code !== "42P01") {
-          console.error("[audit] insert failed:", err.message);
+          logger.error("[audit] insert failed:", err.message);
         }
       }
     });

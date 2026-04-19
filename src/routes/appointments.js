@@ -3,6 +3,7 @@ import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { createAppointmentSchema } from "../validation/appointment.js";
 import { encrypt, decrypt } from "../utils/crypto.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -60,7 +61,7 @@ router.get("/", async (req, res) => {
     const { rows } = await pool.query(query, params);
     res.json(rows.map(mapAppointmentRow));
   } catch (err) {
-    console.error("GET /appointments error:", err);
+    logger.error("GET /appointments error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -82,7 +83,7 @@ router.get("/by-patient/:patientId", async (req, res) => {
 
     res.json(rows.map(mapAppointmentRow));
   } catch (err) {
-    console.error("GET /appointments/by-patient error:", err);
+    logger.error("GET /appointments/by-patient error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -116,7 +117,7 @@ router.get("/today", async (req, res) => {
 
     res.status(403).json({ error: "Forbidden" });
   } catch (err) {
-    console.error("GET /appointments/today error:", err);
+    logger.error("GET /appointments/today error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -143,7 +144,7 @@ router.get("/week", async (req, res) => {
     );
     res.json(rows.map(mapAppointmentRow));
   } catch (err) {
-    console.error("GET /appointments/week error:", err);
+    logger.error("GET /appointments/week error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -172,7 +173,7 @@ router.get("/day", async (req, res) => {
     );
     res.json(rows.map(mapAppointmentRow));
   } catch (err) {
-    console.error("GET /appointments/day error:", err);
+    logger.error("GET /appointments/day error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -241,7 +242,7 @@ router.post("/", async (req, res) => {
     if (err.code === "23503") {
       return res.status(400).json({ error: "Foreign key error" });
     }
-    console.error("POST /appointments error:", err);
+    logger.error("POST /appointments error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -327,7 +328,7 @@ router.put("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /appointments/:id error:", err);
+    logger.error("PUT /appointments/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -362,7 +363,7 @@ router.put("/:id/status", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /appointments/:id/status error:", err);
+    logger.error("PUT /appointments/:id/status error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -387,7 +388,7 @@ router.delete("/:id", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /appointments/:id error:", err);
+    logger.error("DELETE /appointments/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

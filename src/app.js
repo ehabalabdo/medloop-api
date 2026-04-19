@@ -3,6 +3,9 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
+import pinoHttp from "pino-http";
+import logger from "./utils/logger.js";
+import { validateEnv } from "./utils/env.js";
 import authRoutes from "./routes/auth.js";
 import appointmentsRouter from "./routes/appointments.js";
 import reportsRouter from "./routes/reports.js";
@@ -20,18 +23,28 @@ import { auditLog } from "./middleware/auditLog.js";
 import { csrfGuard } from "./middleware/csrf.js";
 
 dotenv.config();
-
-if (!process.env.JWT_SECRET || !process.env.DATABASE_URL) {
-  console.error("[FATAL] JWT_SECRET and DATABASE_URL env vars are required");
-  process.exit(1);
-}
+validateEnv();
 
 const app = express();
 
-// Behind Render's reverse proxy — needed for correct client IPs (rate limiting)
+// Structured request logging (correlates with logger output)
+app.use(pinoHttp({
+  logger,
+  customLogLevel: (req, res, err) => {
+    if (err || res.statusCode >= 500) return "error";
+    if (res.statusCode >= 400) return "warn";
+    return "info";
+  },
+  serializers: {
+    req: (req) => ({ method: req.method, url: req.url, id: req.id }),
+    res: (res) => ({ statusCode: res.statusCode }),
+  },
+}));
+
+// Behind Render's reverse proxy â€” needed for correct client IPs (rate limiting)
 app.set("trust proxy", 1);
 
-// Security headers (strict — API does not serve HTML so we lock CSP fully).
+// Security headers (strict â€” API does not serve HTML so we lock CSP fully).
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: {
@@ -70,7 +83,7 @@ app.use(cors(corsOptions));
 // Handle preflight explicitly for ALL routes
 app.options("*", cors(corsOptions));
 
-// Body size limit — defends against memory-exhaustion attacks
+// Body size limit â€” defends against memory-exhaustion attacks
 app.use(express.json({ limit: "200kb" }));
 
 // Rate limit auth endpoints to slow down brute-force attacks
@@ -85,7 +98,7 @@ app.use("/auth/login", authLimiter);
 app.use("/auth/super-admin/login", authLimiter);
 app.use("/auth/hr-login", authLimiter);
 
-// Global rate limit — broad DoS defense for authenticated endpoints.
+// Global rate limit â€” broad DoS defense for authenticated endpoints.
 // Tuned generously so normal use never hits it; abusive clients do.
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -125,7 +138,7 @@ app.use("/catalog", catalogRouter);
 
 app.get("/", (_, res) => res.send("MedLoop API running"));
 
-// 404 handler — return JSON instead of Express HTML
+// 404 handler â€” return JSON instead of Express HTML
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
 });
@@ -134,12 +147,9 @@ app.use((req, res) => {
 // Errors thrown by route handlers without explicit try/catch land here.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
-  console.error("[unhandled]", req.method, req.originalUrl, err);
+  logger.error({ err, method: req.method, url: req.originalUrl }, "unhandled error");
   if (res.headersSent) return;
   res.status(err.status || 500).json({ error: "Server error" });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`API running on port ${PORT}`)
-);
+export default app;

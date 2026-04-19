@@ -1,3 +1,4 @@
+﻿import logger from "../utils/logger.js";
 /**
  * Bridge-key auth middleware: protects endpoints called by the on-prem
  * Bridge Agent (clinic LAN device that pushes lab results).
@@ -57,8 +58,8 @@ export async function bridgeKeyAuth(req, res, next) {
     req.user = { client_id: row.id, type: "bridge" };
     return next();
   } catch (err) {
-    // table missing (pre-migration) — fail closed
-    console.error("[bridgeKeyAuth] DB error:", err.message);
+    // table missing (pre-migration) â€” fail closed
+    logger.error("[bridgeKeyAuth] DB error:", err.message);
     return res.status(503).json({ error: "bridge_auth_unavailable" });
   }
 }

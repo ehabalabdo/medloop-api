@@ -1,7 +1,8 @@
-import express from "express";
+﻿import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { decrypt, blindIndex } from "../utils/crypto.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -89,7 +90,7 @@ router.get("/", async (req, res) => {
     const { rows } = await pool.query(query, params);
     res.json(rows.map(mapResultRow));
   } catch (err) {
-    console.error("GET /device-results error:", err);
+    logger.error("GET /device-results error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -112,7 +113,7 @@ router.get("/pending-count", async (req, res) => {
 
     res.json({ count: rows[0]?.count || 0 });
   } catch (err) {
-    console.error("GET /device-results/pending-count error:", err);
+    logger.error("GET /device-results/pending-count error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -188,7 +189,7 @@ router.post("/", async (req, res) => {
 
     if (!matchedPatientId) {
       // full_name is encrypted; only legacy plaintext rows can match here.
-      // (Name-based auto-match is best-effort fallback — operators can
+      // (Name-based auto-match is best-effort fallback â€” operators can
       // manually attach unmatched results in the UI.)
       const nameMatch = await pool.query(
         "SELECT id FROM patients WHERE full_name=$1 AND client_id=$2 LIMIT 1",
@@ -224,7 +225,7 @@ router.post("/", async (req, res) => {
       matchedPatientId,
     });
   } catch (err) {
-    console.error("POST /device-results error:", err);
+    logger.error("POST /device-results error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -260,7 +261,7 @@ router.put("/:id/match", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /device-results/:id/match error:", err);
+    logger.error("PUT /device-results/:id/match error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -282,7 +283,7 @@ router.put("/:id/reject", async (req, res) => {
     await pool.query(query, params);
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /device-results/:id/reject error:", err);
+    logger.error("PUT /device-results/:id/reject error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });

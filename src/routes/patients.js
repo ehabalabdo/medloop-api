@@ -8,6 +8,7 @@ import {
   ValidationError, requireString, optionalString,
   optionalEmail, optionalPhone, optionalEnum, optionalDate, boundedJson,
 } from "../utils/validate.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 router.use(auth);
@@ -119,7 +120,7 @@ router.get("/", async (req, res) => {
     const { rows } = await pool.query(query, params);
     res.json(rows.map(mapPatientRow));
   } catch (err) {
-    console.error("GET /patients error:", err);
+    logger.error("GET /patients error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -153,7 +154,7 @@ router.get("/:id", async (req, res) => {
     }
     res.json(mapPatientRow(rows[0]));
   } catch (err) {
-    console.error("GET /patients/:id error:", err);
+    logger.error("GET /patients/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -178,7 +179,7 @@ router.post("/", async (req, res) => {
       history,
     } = req.body;
 
-    // Input validation (throws ValidationError → 400 below)
+    // Input validation (throws ValidationError â†’ 400 below)
     let patientName, validatedPhone, validatedEmail, validatedGender, validatedDob,
         validatedNotes, validatedUsername, validatedPassword,
         validatedMedProfile, validatedVisit, validatedHistory;
@@ -252,7 +253,7 @@ router.post("/", async (req, res) => {
       });
     } catch (err) {
       if (err.code === "23505" && finalUsername) {
-        // Duplicate username — append random suffix
+        // Duplicate username â€” append random suffix
         finalUsername = finalUsername + "-" + Math.floor(1000 + Math.random() * 9000);
         plainPassword = makePassword();
         hashedPassword = await bcrypt.hash(plainPassword, 10);
@@ -284,7 +285,7 @@ router.post("/", async (req, res) => {
       throw err;
     }
   } catch (err) {
-    console.error("POST /patients error:", err);
+    logger.error("POST /patients error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -396,7 +397,7 @@ router.put("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("PUT /patients/:id error:", err);
+    logger.error("PUT /patients/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -421,7 +422,7 @@ router.delete("/:id", async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /patients/:id error:", err);
+    logger.error("DELETE /patients/:id error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
