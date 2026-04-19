@@ -4,6 +4,10 @@ import crypto from "crypto";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { encrypt, decrypt, blindIndex } from "../utils/crypto.js";
+import {
+  ValidationError, requireString, optionalString,
+  optionalEmail, optionalPhone, optionalEnum, optionalDate, boundedJson,
+} from "../utils/validate.js";
 
 const router = express.Router();
 router.use(auth);
@@ -174,22 +178,45 @@ router.post("/", async (req, res) => {
       history,
     } = req.body;
 
-    const patientName = full_name || name;
-    if (!patientName) {
-      return res.status(400).json({ error: "full_name required" });
+    // Input validation (throws ValidationError → 400 below)
+    let patientName, validatedPhone, validatedEmail, validatedGender, validatedDob,
+        validatedNotes, validatedUsername, validatedPassword,
+        validatedMedProfile, validatedVisit, validatedHistory;
+    try {
+      patientName = requireString(full_name || name, "full_name", { min: 1, max: 200 });
+      validatedPhone = optionalPhone(phone, "phone");
+      validatedEmail = optionalEmail(email, "email");
+      validatedGender = optionalEnum(gender, "gender", ["male", "female"]);
+      validatedDob = optionalDate(date_of_birth || dateOfBirth, "date_of_birth");
+      validatedNotes = optionalString(notes, "notes", { max: 4000 });
+      validatedUsername = optionalString(username, "username", { max: 64 });
+      validatedPassword = optionalString(password, "password", { max: 128 });
+      validatedMedProfile = boundedJson(medical_profile || medicalProfile || {}, "medical_profile");
+      validatedVisit = boundedJson(current_visit || currentVisit || {}, "current_visit");
+      if (history != null && !Array.isArray(history)) {
+        throw new ValidationError("history must be an array");
+      }
+      validatedHistory = history || [];
+      // Bound history size as well
+      if (Buffer.byteLength(JSON.stringify(validatedHistory), "utf8") > 64 * 1024) {
+        throw new ValidationError("history too large (max 64KB)");
+      }
+    } catch (e) {
+      if (e.name === "ValidationError") return res.status(400).json({ error: e.message });
+      throw e;
     }
 
     // Auto-generate credentials if not provided
-    let finalUsername = username || (phone ? makeUsername(phone) : null);
-    let plainPassword = password || makePassword();
+    let finalUsername = validatedUsername || (validatedPhone ? makeUsername(validatedPhone) : null);
+    let plainPassword = validatedPassword || makePassword();
     let hashedPassword = await bcrypt.hash(plainPassword, 10);
 
-    const dob = date_of_birth || dateOfBirth || null;
+    const dob = validatedDob;
     const age = dob ? calculateAge(dob) : 0;
-    const medProfile = medical_profile || medicalProfile || {};
-    const visit = current_visit || currentVisit || {};
-    const hist = history || [];
-    const access = has_access !== undefined ? has_access : (hasAccess !== undefined ? hasAccess : false);
+    const medProfile = validatedMedProfile || {};
+    const visit = validatedVisit || {};
+    const hist = validatedHistory;
+    const access = has_access !== undefined ? !!has_access : (hasAccess !== undefined ? !!hasAccess : false);
 
     try {
       const { rows } = await pool.query(
@@ -204,11 +231,11 @@ router.post("/", async (req, res) => {
                 $16, NOW(), NOW(), 'system', 'system', false)
         RETURNING id, full_name, phone, username`,
         [
-          encrypt(patientName), age, dob, gender || "male", encrypt(phone || ""),
-          finalUsername, encrypt(email || null), hashedPassword, access,
-          encrypt(notes || medProfile?.notes || ""),
+          encrypt(patientName), age, dob, validatedGender || "male", encrypt(validatedPhone || ""),
+          finalUsername, encrypt(validatedEmail || null), hashedPassword, access,
+          encrypt(validatedNotes || medProfile?.notes || ""),
           JSON.stringify(medProfile), JSON.stringify(visit), JSON.stringify(hist),
-          blindIndex(normPhone(phone)), blindIndex(finalUsername),
+          blindIndex(normPhone(validatedPhone)), blindIndex(finalUsername),
           client_id,
         ]
       );
@@ -241,11 +268,11 @@ router.post("/", async (req, res) => {
                   $16, NOW(), NOW(), 'system', 'system', false)
           RETURNING id, full_name, phone, username`,
           [
-            encrypt(patientName), age, dob, gender || "male", encrypt(phone || ""),
-            finalUsername, encrypt(email || null), hashedPassword, access,
-            encrypt(notes || medProfile?.notes || ""),
+            encrypt(patientName), age, dob, validatedGender || "male", encrypt(validatedPhone || ""),
+            finalUsername, encrypt(validatedEmail || null), hashedPassword, access,
+            encrypt(validatedNotes || medProfile?.notes || ""),
             JSON.stringify(medProfile), JSON.stringify(visit), JSON.stringify(hist),
-            blindIndex(normPhone(phone)), blindIndex(finalUsername),
+            blindIndex(normPhone(validatedPhone)), blindIndex(finalUsername),
             client_id,
           ]
         );

@@ -7,6 +7,9 @@ import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { encrypt, decrypt, blindIndex } from "../utils/crypto.js";
 import {
+  requireString, optionalString, optionalEmail, optionalPhone,
+} from "../utils/validate.js";
+import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
   generateAuthenticationOptions,
@@ -422,10 +425,23 @@ router.post("/employees", async (req, res) => {
         .json({ error: "full_name, username, password required" });
     }
 
+    // Input validation
+    let vName, vUser, vPass, vPhone, vEmail;
+    try {
+      vName = requireString(full_name, "full_name", { min: 1, max: 200 });
+      vUser = requireString(username, "username", { min: 3, max: 64 });
+      vPass = requireString(password, "password", { min: 4, max: 128 });
+      vPhone = optionalPhone(phone, "phone");
+      vEmail = optionalEmail(email, "email");
+    } catch (e) {
+      if (e.name === "ValidationError") return res.status(400).json({ error: e.message });
+      throw e;
+    }
+
     // Check uniqueness
     const dup = await pool.query(
       `SELECT id FROM hr_employees WHERE client_id=$1 AND username=$2`,
-      [client_id, username]
+      [client_id, vUser]
     );
     if (dup.rows.length) {
       return res
@@ -433,22 +449,22 @@ router.post("/employees", async (req, res) => {
         .json({ error: "Username already exists for this client" });
     }
 
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(vPass, 10);
 
     const { rows } = await pool.query(
       `INSERT INTO hr_employees (client_id, full_name, username, password, phone, email, basic_salary, role, email_idx, phone_idx)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
         client_id,
-        encrypt(full_name),
-        username,
+        encrypt(vName),
+        vUser,
         hash,
-        encrypt(phone || null),
-        encrypt(email || null),
+        encrypt(vPhone || null),
+        encrypt(vEmail || null),
         basic_salary || 0,
         role || 'HR_EMPLOYEE',
-        blindIndex(email),
-        blindIndex(phone ? String(phone).replace(/\D/g, "") : null),
+        blindIndex(vEmail),
+        blindIndex(vPhone ? String(vPhone).replace(/\D/g, "") : null),
       ]
     );
 
