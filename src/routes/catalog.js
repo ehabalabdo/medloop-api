@@ -1,7 +1,6 @@
 import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
-import * as XLSX from "xlsx";
 
 const router = express.Router();
 router.use(auth);

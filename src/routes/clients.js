@@ -526,4 +526,65 @@ router.post("/:id/bridge-key/rotate", requireSuperAdmin, async (req, res) => {
   }
 });
 
+/**
+ * GET /clients/security-alerts (super_admin only)
+ * Surfaces suspicious patterns from audit_log over the last 24h:
+ *   - IPs with >= 10 4xx/5xx responses
+ *   - users with >= 5 401/403 responses
+ *   - locked accounts (failed_login_count >= 5)
+ */
+router.get("/security-alerts", requireSuperAdmin, async (req, res) => {
+  try {
+    const [ipAbuse, userAbuse, locked] = await Promise.all([
+      pool.query(
+        `SELECT ip, COUNT(*) AS count
+           FROM audit_log
+          WHERE created_at >= NOW() - INTERVAL '24 hours'
+            AND status_code >= 400
+          GROUP BY ip
+         HAVING COUNT(*) >= 10
+          ORDER BY count DESC
+          LIMIT 50`
+      ),
+      pool.query(
+        `SELECT user_id, user_type, client_id, COUNT(*) AS count
+           FROM audit_log
+          WHERE created_at >= NOW() - INTERVAL '24 hours'
+            AND status_code IN (401, 403)
+            AND user_id IS NOT NULL
+          GROUP BY user_id, user_type, client_id
+         HAVING COUNT(*) >= 5
+          ORDER BY count DESC
+          LIMIT 50`
+      ),
+      pool.query(
+        `SELECT 'users' AS source, id, failed_login_count, locked_until FROM users WHERE locked_until > NOW()
+         UNION ALL
+         SELECT 'hr_employees', id, failed_login_count, locked_until FROM hr_employees WHERE locked_until > NOW()
+         UNION ALL
+         SELECT 'patients', id, failed_login_count, locked_until FROM patients WHERE locked_until > NOW()
+         UNION ALL
+         SELECT 'super_admins', id, failed_login_count, locked_until FROM super_admins WHERE locked_until > NOW()
+         LIMIT 100`
+      ),
+    ]);
+
+    res.json({
+      window: "24h",
+      generated_at: new Date().toISOString(),
+      ip_abuse: ipAbuse.rows,
+      user_abuse: userAbuse.rows,
+      locked_accounts: locked.rows,
+      summary: {
+        ip_abuse_count: ipAbuse.rows.length,
+        user_abuse_count: userAbuse.rows.length,
+        locked_count: locked.rows.length,
+      },
+    });
+  } catch (err) {
+    console.error("GET /clients/security-alerts error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 export default router;
