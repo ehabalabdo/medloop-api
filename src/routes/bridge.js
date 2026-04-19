@@ -17,6 +17,7 @@
 import express from "express";
 import pool from "../db.js";
 import { bridgeKeyAuth } from "../middleware/bridgeKeyAuth.js";
+import { blindIndex } from "../utils/crypto.js";
 import rateLimit from "express-rate-limit";
 
 const router = express.Router();
@@ -97,6 +98,20 @@ async function insertResult(clientId, body) {
       [numericId, clientId]
     );
     if (m.rows.length > 0) { matchedPatientId = m.rows[0].id; status = "matched"; }
+  }
+
+  // Fallback: phone blind-index match (phone column is encrypted).
+  if (!matchedPatientId) {
+    const normalized = String(identifier).replace(/\D/g, "");
+    if (normalized) {
+      const phoneIdx = blindIndex(normalized);
+      const m = await pool.query(
+        `SELECT id FROM patients
+         WHERE phone_idx=$1 AND client_id=$2 LIMIT 1`,
+        [phoneIdx, clientId]
+      );
+      if (m.rows.length > 0) { matchedPatientId = m.rows[0].id; status = "matched"; }
+    }
   }
 
   const { rows } = await pool.query(
