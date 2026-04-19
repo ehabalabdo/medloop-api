@@ -83,6 +83,17 @@ app.use("/auth/login", authLimiter);
 app.use("/auth/super-admin/login", authLimiter);
 app.use("/auth/hr-login", authLimiter);
 
+// Global rate limit — broad DoS defense for authenticated endpoints.
+// Tuned generously so normal use never hits it; abusive clients do.
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Slow down." },
+});
+app.use(globalLimiter);
+
 // Audit log middleware (best-effort, runs after routes set req.user)
 app.use(auditLog);
 

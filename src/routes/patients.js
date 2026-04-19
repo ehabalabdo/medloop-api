@@ -250,7 +250,7 @@ router.post("/", async (req, res) => {
           ]
         );
         return res.status(201).json({
-          patient: rows[0],
+          patient: mapPatientRow(rows[0]),
           credentials: { username: finalUsername, password: plainPassword },
         });
       }
