@@ -17,6 +17,7 @@ import hrRouter from "./routes/hr.js";
 import catalogRouter from "./routes/catalog.js";
 import bridgeRouter from "./routes/bridge.js";
 import { auditLog } from "./middleware/auditLog.js";
+import { csrfGuard } from "./middleware/csrf.js";
 
 dotenv.config();
 
@@ -69,16 +70,21 @@ const authLimiter = rateLimit({
 });
 app.use("/auth/login", authLimiter);
 app.use("/auth/super-admin/login", authLimiter);
-appAudit log middleware (best-effort, runs after routes set req.user)
+app.use("/auth/hr-login", authLimiter);
+
+// Audit log middleware (best-effort, runs after routes set req.user)
 app.use(auditLog);
 
 // Public routes (no auth)
 app.use("/auth", authRoutes);
 
 // Bridge Agent routes (auth via X-Bridge-Key, NOT JWT)
-app.use("/bridge", bridgeRouter
-// Public routes (no auth)
-app.use("/auth", authRoutes);
+app.use("/bridge", bridgeRouter);
+
+// CSRF guard for browser-origin mutating requests (defense in depth on top
+// of Bearer JWT). Mounted AFTER /bridge (server-to-server) and /auth (login
+// happens before any token exists, so frontend sends X-Requested-With).
+app.use(csrfGuard);
 
 // Protected routes (require JWT via router-level middleware)
 app.use("/appointments", appointmentsRouter);

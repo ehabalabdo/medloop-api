@@ -1,6 +1,7 @@
 import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import { encrypt, decrypt } from "../utils/crypto.js";
 
 const router = express.Router();
 router.use(auth);
@@ -11,7 +12,7 @@ function mapInvoiceRow(row) {
     id: row.id,
     visitId: row.visit_id,
     patientId: row.patient_id,
-    patientName: row.patient_name,
+    patientName: decrypt(row.patient_name),
     items: typeof row.items === "string" ? JSON.parse(row.items) : row.items,
     totalAmount: parseFloat(row.total_amount),
     paidAmount: parseFloat(row.paid_amount),
@@ -82,7 +83,7 @@ router.post("/", async (req, res) => {
       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, NOW(), NOW(), 'system', 'system', false)
       RETURNING *`,
       [
-        invoiceId, vId, pId, pName, JSON.stringify(items || []),
+        invoiceId, vId, pId, encrypt(pName), JSON.stringify(items || []),
         total, paid, method, status || "unpaid", client_id,
       ]
     );

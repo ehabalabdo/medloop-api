@@ -2,6 +2,7 @@ import express from "express";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { createAppointmentSchema } from "../validation/appointment.js";
+import { encrypt, decrypt } from "../utils/crypto.js";
 
 const router = express.Router();
 router.use(auth);
@@ -11,12 +12,12 @@ function mapAppointmentRow(row) {
   return {
     id: String(row.id),
     patientId: String(row.patient_id),
-    patientName: row.patient_name,
+    patientName: decrypt(row.patient_name),
     clinicId: String(row.clinic_id),
     doctorId: row.doctor_id ? String(row.doctor_id) : undefined,
     date: row.start_time ? new Date(row.start_time).getTime() : (row.date || Date.now()),
     status: row.status,
-    reason: row.reason || "",
+    reason: decrypt(row.reason) || "",
     notes: "",
     suggestedDate: row.suggested_date ? new Date(row.suggested_date).getTime() : undefined,
     suggestedNotes: row.suggested_notes || undefined,
@@ -220,7 +221,7 @@ router.post("/", async (req, res) => {
        (patient_id, patient_name, clinic_id, doctor_id, start_time, end_time, status, reason, client_id, created_at, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
        RETURNING *`,
-      [pId, pName, cId, dId, startTime, endTime, status || "scheduled", reason || "", client_id, userId]
+      [pId, encrypt(pName), cId, dId, startTime, endTime, status || "scheduled", encrypt(reason || ""), client_id, userId]
     );
 
     res.status(201).json(mapAppointmentRow(rows[0]));
@@ -264,7 +265,7 @@ router.put("/:id", async (req, res) => {
     }
     if (reason !== undefined) {
       sets.push(`reason=$${idx++}`);
-      params.push(reason);
+      params.push(encrypt(reason));
     }
 
     const cId = clinic_id || (clinicId ? parseInt(clinicId) : undefined);

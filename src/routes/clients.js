@@ -1,5 +1,6 @@
 import express from "express";
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
 
@@ -446,5 +447,35 @@ function mapClientRow(row) {
     },
   };
 }
+
+/**
+ * POST /clients/:id/bridge-key/rotate
+ * Super-admin only. Generates a new bridge agent secret, stores SHA-256 hash
+ * in clients.bridge_key_hash, returns the raw secret ONCE.
+ */
+router.post("/:id/bridge-key/rotate", requireSuperAdmin, async (req, res) => {
+  try {
+    const clientId = parseInt(req.params.id);
+    if (!clientId) return res.status(400).json({ error: "Invalid client id" });
+
+    const secret = crypto.randomBytes(32).toString("hex");
+    const hash = crypto.createHash("sha256").update(secret).digest("hex");
+
+    const { rowCount } = await pool.query(
+      `UPDATE clients SET bridge_key_hash=$1 WHERE id=$2`,
+      [hash, clientId]
+    );
+    if (!rowCount) return res.status(404).json({ error: "Client not found" });
+
+    return res.json({
+      ok: true,
+      bridge_key: secret,
+      warning: "Store this key now. It will not be shown again.",
+    });
+  } catch (err) {
+    console.error("POST /clients/:id/bridge-key/rotate error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
 export default router;

@@ -2,6 +2,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import pool from "../db.js";
+import { decrypt, blindIndex } from "../utils/crypto.js";
 
 const router = express.Router();
 
@@ -88,16 +89,27 @@ router.post("/login", async (req, res) => {
         },
       });
     }
- (client_id already validated above)
+
+    // Patient login: search by blind indexes first (encrypted columns are not directly searchable),
+    // then fall back to plaintext columns for legacy rows that haven't been migrated yet.
+    const usernameIdx = blindIndex(username);
+    const phoneIdx = blindIndex(String(username).replace(/\D/g, ""));
+
     const patientQuery = `SELECT id, full_name, phone, email, username, password, has_access, client_id,
                 date_of_birth, gender, age, medical_profile, current_visit, history
          FROM patients
-         WHERE (username=$1 OR phone=$1 OR full_name=$1 OR email=$1)
+         WHERE (
+              ($3::char(64) IS NOT NULL AND username_idx=$3)
+           OR ($4::char(64) IS NOT NULL AND phone_idx=$4)
+           OR username=$1
+           OR phone=$1
+           OR full_name=$1
+           OR email=$1
+         )
            AND has_access=true
            AND client_id=$2
          LIMIT 1`;
-    const patientParams = [username, client_id
-    const patientParams = client_id ? [username, client_id] : [username];
+    const patientParams = [username, client_id, usernameIdx, phoneIdx];
     const patient = await pool.query(patientQuery, patientParams);
 
     if (patient.rows.length) {
@@ -130,9 +142,9 @@ router.post("/login", async (req, res) => {
         type: "patient",
         patient: {
           id: String(p.id),
-          name: p.full_name,
-          phone: p.phone,
-          email: p.email,
+          name: decrypt(p.full_name),
+          phone: decrypt(p.phone),
+          email: decrypt(p.email),
           username: p.username,
           clientId: p.client_id,
         },
@@ -257,12 +269,17 @@ router.post("/hr-login", async (req, res) => {
       return res.status(400).json({ error: "username, password, client_id required" });
     }
 
+    const emailIdx = blindIndex(username);
     const result = await pool.query(
       `SELECT id, client_id, full_name, username, password, status
        FROM hr_employees
-       WHERE (username=$1 OR email=$1) AND client_id=$2
+       WHERE (
+            username=$1
+         OR email=$1
+         OR ($3::char(64) IS NOT NULL AND email_idx=$3)
+       ) AND client_id=$2
        LIMIT 1`,
-      [username, client_id]
+      [username, client_id, emailIdx]
     );
 
     if (!result.rows.length) {
@@ -302,7 +319,7 @@ router.post("/hr-login", async (req, res) => {
       type: "hr_employee",
       employee: {
         id: emp.id,
-        fullName: emp.full_name,
+        fullName: decrypt(emp.full_name),
         username: emp.username,
         clientId: emp.client_id,
       },
@@ -317,6 +334,134 @@ router.post("/hr-login", async (req, res) => {
  * POST /auth/refresh
  * Refresh an expired JWT access token
  */
+/**
+ * POST /auth/migrate-encryption
+ * Super-admin only. Re-encrypts plaintext PII rows and back-fills blind
+ * indexes. Idempotent: rows already prefixed with `enc:` are skipped.
+ * Safe to re-run after toggling ENCRYPTION_KEY.
+ */
+router.post("/migrate-encryption", async (req, res) => {
+  try {
+    // Authn via JWT (super-admin)
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Unauthorized" });
+    let decoded;
+    try { decoded = jwt.verify(token, process.env.JWT_SECRET); }
+    catch { return res.status(401).json({ error: "Invalid token" }); }
+    if (decoded.role !== "super_admin" && decoded.type !== "super_admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const { encrypt } = await import("../utils/crypto.js");
+    const stats = { patients: 0, hr_employees: 0, appointments: 0, invoices: 0 };
+    const normPhone = (p) => (p ? String(p).replace(/\D/g, "") : null);
+
+    // patients ---------------------------------------------------------
+    {
+      const { rows } = await pool.query(
+        `SELECT id, full_name, phone, email, notes, username FROM patients`
+      );
+      for (const r of rows) {
+        const sets = [];
+        const params = [];
+        let idx = 1;
+        const enc = (col, v) => {
+          if (v == null) return;
+          if (typeof v === "string" && v.startsWith("enc:")) return;
+          sets.push(`${col}=$${idx++}`);
+          params.push(encrypt(v));
+        };
+        enc("full_name", r.full_name);
+        enc("phone", r.phone);
+        enc("email", r.email);
+        enc("notes", r.notes);
+        // blind indexes
+        if (r.phone) { sets.push(`phone_idx=$${idx++}`); params.push(blindIndex(normPhone(r.phone))); }
+        if (r.username) { sets.push(`username_idx=$${idx++}`); params.push(blindIndex(r.username)); }
+        if (sets.length) {
+          params.push(r.id);
+          await pool.query(`UPDATE patients SET ${sets.join(", ")} WHERE id=$${idx}`, params);
+          stats.patients++;
+        }
+      }
+    }
+
+    // hr_employees -----------------------------------------------------
+    {
+      const { rows } = await pool.query(
+        `SELECT id, full_name, phone, email FROM hr_employees`
+      );
+      for (const r of rows) {
+        const sets = [];
+        const params = [];
+        let idx = 1;
+        const enc = (col, v) => {
+          if (v == null) return;
+          if (typeof v === "string" && v.startsWith("enc:")) return;
+          sets.push(`${col}=$${idx++}`);
+          params.push(encrypt(v));
+        };
+        enc("full_name", r.full_name);
+        enc("phone", r.phone);
+        enc("email", r.email);
+        if (r.email) { sets.push(`email_idx=$${idx++}`); params.push(blindIndex(r.email)); }
+        if (r.phone) { sets.push(`phone_idx=$${idx++}`); params.push(blindIndex(normPhone(r.phone))); }
+        if (sets.length) {
+          params.push(r.id);
+          await pool.query(`UPDATE hr_employees SET ${sets.join(", ")} WHERE id=$${idx}`, params);
+          stats.hr_employees++;
+        }
+      }
+    }
+
+    // appointments -----------------------------------------------------
+    {
+      const { rows } = await pool.query(
+        `SELECT id, patient_name, reason FROM appointments`
+      );
+      for (const r of rows) {
+        const sets = [];
+        const params = [];
+        let idx = 1;
+        const enc = (col, v) => {
+          if (v == null) return;
+          if (typeof v === "string" && v.startsWith("enc:")) return;
+          sets.push(`${col}=$${idx++}`);
+          params.push(encrypt(v));
+        };
+        enc("patient_name", r.patient_name);
+        enc("reason", r.reason);
+        if (sets.length) {
+          params.push(r.id);
+          await pool.query(`UPDATE appointments SET ${sets.join(", ")} WHERE id=$${idx}`, params);
+          stats.appointments++;
+        }
+      }
+    }
+
+    // invoices ---------------------------------------------------------
+    {
+      const { rows } = await pool.query(
+        `SELECT id, patient_name FROM invoices`
+      );
+      for (const r of rows) {
+        if (!r.patient_name || (typeof r.patient_name === "string" && r.patient_name.startsWith("enc:"))) continue;
+        await pool.query(
+          `UPDATE invoices SET patient_name=$1 WHERE id=$2`,
+          [encrypt(r.patient_name), r.id]
+        );
+        stats.invoices++;
+      }
+    }
+
+    return res.json({ ok: true, migrated: stats });
+  } catch (err) {
+    console.error("POST /auth/migrate-encryption error:", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
 router.post("/refresh", (req, res) => {
   const { token } = req.body;
   try {

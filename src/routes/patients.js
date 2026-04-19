@@ -3,9 +3,15 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import pool from "../db.js";
 import { auth } from "../middleware/auth.js";
+import { encrypt, decrypt, blindIndex } from "../utils/crypto.js";
 
 const router = express.Router();
 router.use(auth);
+
+// Normalize a phone number for blind-index purposes (digits-only).
+function normPhone(p) {
+  return p ? String(p).replace(/\D/g, "") : "";
+}
 
 function makeUsername(phone) {
   const clean = String(phone || "").replace(/\D/g, "");
@@ -32,6 +38,15 @@ function calculateAge(dateOfBirth) {
 
 /** Map a DB row to frontend-compatible Patient shape */
 function mapPatientRow(row) {
+  // Decrypt PII columns transparently. decrypt() is a no-op for plaintext
+  // values (legacy rows pre-encryption migration). DOB stays plaintext
+  // because date_of_birth is a DATE column.
+  const fullName = decrypt(row.full_name);
+  const phone = decrypt(row.phone);
+  const email = decrypt(row.email);
+  const dobRaw = row.date_of_birth;
+  const notes = decrypt(row.notes);
+
   let medicalProfile = row.medical_profile;
   if (typeof medicalProfile === "string") {
     try { medicalProfile = JSON.parse(medicalProfile); } catch { medicalProfile = {}; }
@@ -44,19 +59,19 @@ function mapPatientRow(row) {
   if (typeof history === "string") {
     try { history = JSON.parse(history); } catch { history = []; }
   }
-  const dobStr = row.date_of_birth instanceof Date
-    ? row.date_of_birth.toISOString().split("T")[0]
-    : row.date_of_birth ? String(row.date_of_birth) : undefined;
+  const dobStr = dobRaw instanceof Date
+    ? dobRaw.toISOString().split("T")[0]
+    : dobRaw ? String(dobRaw) : undefined;
 
   return {
     id: String(row.id),
-    name: row.full_name,
+    name: fullName,
     age: dobStr ? calculateAge(dobStr) : (row.age || 0),
     dateOfBirth: dobStr || undefined,
     gender: row.gender || "male",
-    phone: row.phone || "",
+    phone: phone || "",
     username: row.username || undefined,
-    email: row.email || undefined,
+    email: email || undefined,
     hasAccess: row.has_access || false,
     medicalProfile: medicalProfile && Object.keys(medicalProfile).length > 0
       ? medicalProfile
@@ -65,7 +80,7 @@ function mapPatientRow(row) {
           chronicConditions: { exists: false, details: "" },
           currentMedications: { exists: false, details: "" },
           isPregnant: false,
-          notes: row.notes || "",
+          notes: notes || "",
         },
     currentVisit: currentVisit && Object.keys(currentVisit).length > 0
       ? currentVisit
@@ -75,7 +90,7 @@ function mapPatientRow(row) {
           date: Date.now(),
           status: "waiting",
           priority: "normal",
-          reasonForVisit: row.notes || "",
+          reasonForVisit: notes || "",
         },
     history: Array.isArray(history) ? history : [],
     createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
@@ -181,16 +196,19 @@ router.post("/", async (req, res) => {
         `INSERT INTO patients (
           full_name, age, date_of_birth, gender, phone, username, email, password, has_access,
           notes, medical_profile, current_visit, history,
+          phone_idx, username_idx,
           client_id, created_at, updated_at, created_by, updated_by, is_archived
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb,
-                $14, NOW(), NOW(), 'system', 'system', false)
+                $14, $15,
+                $16, NOW(), NOW(), 'system', 'system', false)
         RETURNING id, full_name, phone, username`,
         [
-          patientName, age, dob, gender || "male", phone || "",
-          finalUsername, email || null, hashedPassword, access,
-          notes || medProfile?.notes || "",
+          encrypt(patientName), age, dob, gender || "male", encrypt(phone || ""),
+          finalUsername, encrypt(email || null), hashedPassword, access,
+          encrypt(notes || medProfile?.notes || ""),
           JSON.stringify(medProfile), JSON.stringify(visit), JSON.stringify(hist),
+          blindIndex(normPhone(phone)), blindIndex(finalUsername),
           client_id,
         ]
       );
@@ -198,7 +216,7 @@ router.post("/", async (req, res) => {
       res.status(201).json({
         patient: mapPatientRow({
           ...rows[0],
-          full_name: patientName,
+          full_name: encrypt(patientName),
           medical_profile: medProfile,
           current_visit: visit,
           history: hist,
@@ -215,16 +233,19 @@ router.post("/", async (req, res) => {
           `INSERT INTO patients (
             full_name, age, date_of_birth, gender, phone, username, email, password, has_access,
             notes, medical_profile, current_visit, history,
+            phone_idx, username_idx,
             client_id, created_at, updated_at, created_by, updated_by, is_archived
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb,
-                  $14, NOW(), NOW(), 'system', 'system', false)
+                  $14, $15,
+                  $16, NOW(), NOW(), 'system', 'system', false)
           RETURNING id, full_name, phone, username`,
           [
-            patientName, age, dob, gender || "male", phone || "",
-            finalUsername, email || null, hashedPassword, access,
-            notes || medProfile?.notes || "",
+            encrypt(patientName), age, dob, gender || "male", encrypt(phone || ""),
+            finalUsername, encrypt(email || null), hashedPassword, access,
+            encrypt(notes || medProfile?.notes || ""),
             JSON.stringify(medProfile), JSON.stringify(visit), JSON.stringify(hist),
+            blindIndex(normPhone(phone)), blindIndex(finalUsername),
             client_id,
           ]
         );
@@ -270,7 +291,7 @@ router.put("/:id", async (req, res) => {
     const patientName = full_name || name;
     if (patientName !== undefined) {
       sets.push(`full_name=$${idx++}`);
-      params.push(patientName);
+      params.push(encrypt(patientName));
     }
 
     const dob = date_of_birth || dateOfBirth;
@@ -290,15 +311,19 @@ router.put("/:id", async (req, res) => {
     }
     if (phone !== undefined) {
       sets.push(`phone=$${idx++}`);
-      params.push(phone);
+      params.push(encrypt(phone));
+      sets.push(`phone_idx=$${idx++}`);
+      params.push(blindIndex(normPhone(phone)));
     }
     if (username !== undefined) {
       sets.push(`username=$${idx++}`);
       params.push(username || null);
+      sets.push(`username_idx=$${idx++}`);
+      params.push(blindIndex(username));
     }
     if (email !== undefined) {
       sets.push(`email=$${idx++}`);
-      params.push(email || null);
+      params.push(encrypt(email || null));
     }
     if (password !== undefined && password !== "") {
       const hashed = await bcrypt.hash(password, 10);
